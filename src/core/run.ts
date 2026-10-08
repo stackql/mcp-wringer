@@ -1,14 +1,17 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Finding, JsonValue, Scenario, ScenarioStep, SpecRevision } from "./types.js";
-import { ScenarioError } from "./errors.js";
+import { CoverageError, ScenarioError } from "./errors.js";
 import { createRootSeed, deriveSeed } from "./seed.js";
 import { assertScenarioSafety, type SafetyPolicy } from "./safety.js";
 import { recordNovelScenario } from "./corpus.js";
 import { inspectServer } from "../cli/inspect.js";
-import { generateScenarios } from "../generators/index.js";
+import { generateScenarios, generatorRegistry } from "../generators/index.js";
 import type { ArgumentStrategySelection } from "../generators/types.js";
+import { coverageProviderRegistry } from "../coverage-feedback/index.js";
+import type { CoverageFeedbackResult, CoverageSelection } from "../coverage-feedback/types.js";
 import { evaluateOracles, type OracleContext, type OracleSelection } from "../oracles/index.js";
 import { deduplicateFindings } from "../oracles/findings.js";
 import { specProfiles } from "../spec/profiles.js";
@@ -49,6 +52,7 @@ interface FuzzRunCommonOptions {
   generatorSequence?: readonly string[];
   argumentStrategies?: readonly ArgumentStrategySelection[];
   oracleSelections?: readonly OracleSelection[];
+  coverageFeedback?: CoverageSelection;
   timeoutMs?: number;
   confirmations?: number;
 }
@@ -85,6 +89,8 @@ export interface FuzzRunResult {
   diagnostics: string[];
   corpusEntriesAdded: number;
   reproducers: Array<{ findingId: string; scenario: Scenario }>;
+  firstFindingCases?: Record<string, number>;
+  coverageFeedback?: CoverageFeedbackResult;
   baseline?: { newFindingIds: string[]; staleFindingIds: string[] };
 }
 
@@ -145,41 +151,84 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
 
   const target = getTargetOptions(options);
   const transportName = target.transport ?? "stdio";
-  const scenarios = generateScenarios(
-    options.revision,
-    surface,
-    seed,
-    caseLimit,
-    options.generatorSequence ?? defaultGeneratorSequence,
-    transportName,
-    options.argumentStrategies,
-  );
+  const coverageSelection = options.coverageFeedback;
+  let coverageProvider: ReturnType<typeof coverageProviderRegistry.get> | undefined;
+  let coverageDirectory: string | undefined;
+  let coverageTarget: TransportTargetOptions | undefined;
+  if (coverageSelection !== undefined) {
+    if (target.transport !== "stdio" || workers !== 1 || restartPolicy !== "per-case") {
+      throw new CoverageError(
+        "Coverage feedback requires a spawned stdio target, workers=1, and restartPolicy='per-case'.",
+      );
+    }
+    if (!Number.isInteger(coverageSelection.batchSize)
+      || coverageSelection.batchSize < 1 || coverageSelection.batchSize > 100) {
+      throw new CoverageError("Coverage feedback batchSize must be an integer from 1 to 100.");
+    }
+    coverageProvider = coverageProviderRegistry.get(coverageSelection.provider);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(coverageProvider.environmentVariable)) {
+      throw new CoverageError(
+        `Coverage provider '${coverageSelection.provider}' declares an invalid environment variable name.`,
+      );
+    }
+    const configuredCoverageVariable = findEnvironmentVariable(target.env, coverageProvider.environmentVariable);
+    const inheritedCoverageVariable = options.inheritEnvironment
+      ? findEnvironmentVariable(process.env, coverageProvider.environmentVariable)
+      : undefined;
+    if (configuredCoverageVariable !== undefined || inheritedCoverageVariable !== undefined) {
+      throw new CoverageError(
+        `Do not set ${configuredCoverageVariable ?? inheritedCoverageVariable} in target environment while coverage feedback is enabled.`,
+      );
+    }
+    coverageDirectory = await mkdtemp(join(tmpdir(), "mcp-wringer-coverage-"));
+    coverageTarget = {
+      ...target,
+      env: {
+        ...target.env,
+        [coverageProvider.environmentVariable]: coverageDirectory,
+      },
+    };
+  }
+  const scenarios = coverageSelection === undefined
+    ? generateScenarios(
+      options.revision,
+      surface,
+      seed,
+      caseLimit,
+      options.generatorSequence ?? defaultGeneratorSequence,
+      transportName,
+      options.argumentStrategies,
+    )
+    : [];
   const deadline = startedAt + durationLimitMs;
   const caseResults: Array<{ scenario: Scenario; context: OracleContext; findings: Finding[] } | undefined> =
-    Array.from({ length: scenarios.length });
+    Array.from({ length: caseLimit });
   let nextIndex = 0;
   let corpusEntriesAdded = 0;
   const corpusDirectory = options.corpusDirectory ?? resolve(".mcp-wringer", "corpus");
   const adapter = transportRegistry.get(transportName);
-  const recordCase = async (index: number, session?: TransportSession): Promise<{
+  const recordCase = async (
+    generated: Scenario,
+    index: number,
+    session?: TransportSession,
+    runTarget: TransportTargetOptions = target,
+  ): Promise<{
     session?: TransportSession;
     stop?: boolean;
   }> => {
-    const generated = scenarios[index];
-    if (generated === undefined) {
-      return { ...(session === undefined ? {} : { session }) };
-    }
     const scenario = addHealthChecks(generated, session === undefined);
     assertScenarioSafety(scenario, surface, options.safety);
-    const currentSession = session ?? adapter.createSession({ ...target, scenario });
-    const result = await currentSession.execute(scenario, { closeAfterScenario: restartPolicy === "per-case" });
+    const currentSession = session ?? adapter.createSession({ ...runTarget, scenario });
+    const result = await currentSession.execute(scenario, {
+      closeAfterScenario: restartPolicy === "per-case" || coverageSelection !== undefined,
+    });
     const context = createOracleContext(scenario, result, options.revision);
     const findings = evaluateOracles(context, options.oracleSelections);
     caseResults[index] = { scenario, context, findings };
     if (await recordNovelScenario(corpusDirectory, scenario, result.trace, seed)) {
       corpusEntriesAdded += 1;
     }
-    if (restartPolicy === "per-case") {
+    if (restartPolicy === "per-case" || coverageSelection !== undefined) {
       return {};
     }
     const targetExited = result.outcome.exitCode !== null || result.outcome.signal !== null;
@@ -203,16 +252,137 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
       if (index >= scenarios.length || performance.now() >= deadline) {
         return;
       }
-      await recordCase(index);
+      const scenario = scenarios[index];
+      if (scenario !== undefined) {
+        await recordCase(scenario, index);
+      }
     }
   };
-  if (restartPolicy === "per-case") {
+  let coverageFeedbackResult: CoverageFeedbackResult | undefined;
+  if (coverageSelection !== undefined && coverageProvider !== undefined
+    && coverageDirectory !== undefined && coverageTarget !== undefined) {
+    const selectedSequence = options.generatorSequence ?? defaultGeneratorSequence;
+    const availableNames = generatorRegistry.names();
+    const weights = new Map<string, number>();
+    for (const name of selectedSequence) {
+      if (availableNames.includes(name)) {
+        weights.set(name, (weights.get(name) ?? 0) + 1);
+      }
+    }
+    if (weights.size === 0) {
+      await rm(coverageDirectory, { recursive: true, force: true });
+      throw new CoverageError("Coverage feedback requires at least one registered generator in generatorSequence.");
+    }
+    const generatorOrder = [...weights.keys()];
+    const generatorStats = new Map(generatorOrder.map((name) => [name, { batches: 0, newFeatures: 0 }]));
+    const allFeatures = new Set<string>();
+    let totalNewFeatures = 0;
+    let batches = 0;
+    const generatorBatches: string[] = [];
+    let caseIndex = 0;
+    try {
+      while (caseIndex < caseLimit && performance.now() < deadline) {
+        const selectedGenerator = chooseCoverageGenerator(generatorOrder, weights, generatorStats, batches);
+        const batchSize = Math.min(coverageSelection.batchSize, caseLimit - caseIndex);
+        const batchStartIndex = caseIndex;
+        const batchScenarios = generateScenarios(
+          options.revision,
+          surface,
+          seed,
+          batchSize,
+          [selectedGenerator],
+          transportName,
+          options.argumentStrategies,
+          caseIndex,
+        );
+        let session: TransportSession | undefined;
+        let completedCases = 0;
+        try {
+          for (let offset = 0; offset < batchScenarios.length && performance.now() < deadline; offset += 1) {
+            const scenario = batchScenarios[offset];
+            if (scenario === undefined) {
+              continue;
+            }
+            const index = caseIndex + offset;
+            const outcome = await recordCase(scenario, index, session, coverageTarget);
+            session = outcome.session;
+            if (caseResults[index] !== undefined) {
+              completedCases += 1;
+            }
+            if (outcome.stop) {
+              break;
+            }
+          }
+        } finally {
+          if (session !== undefined) {
+            await session.close();
+          }
+        }
+        caseIndex += completedCases;
+        if (completedCases === 0) {
+          break;
+        }
+        const batchTargetFailed = caseResults
+          .slice(batchStartIndex, batchStartIndex + completedCases)
+          .some((item) => item !== undefined
+            && (item.context.outcome.failure !== undefined
+              || item.context.outcome.exitCode !== null
+              || item.context.outcome.signal !== null));
+        let currentFeatures: ReadonlySet<string>;
+        let coverageUnavailable = false;
+        try {
+          currentFeatures = await coverageProvider.collect(coverageDirectory);
+        } catch (error) {
+          if (!(error instanceof CoverageError) || !batchTargetFailed) {
+            throw error;
+          }
+          diagnostics.push(
+            `Coverage feedback was unavailable after a failed target batch: ${error.message}`,
+          );
+          currentFeatures = new Set();
+          coverageUnavailable = true;
+        }
+        if (batchTargetFailed && currentFeatures.size === 0 && !coverageUnavailable) {
+          diagnostics.push("Coverage feedback reported no executed features after a failed target batch.");
+        }
+        let newlyCovered = 0;
+        for (const feature of currentFeatures) {
+          if (!allFeatures.has(feature)) {
+            allFeatures.add(feature);
+            newlyCovered += 1;
+          }
+        }
+        const stats = generatorStats.get(selectedGenerator);
+        if (stats === undefined) {
+          throw new CoverageError(`Coverage scheduler lost generator '${selectedGenerator}'.`);
+        }
+        stats.batches += 1;
+        stats.newFeatures += newlyCovered;
+        totalNewFeatures += newlyCovered;
+        batches += 1;
+        generatorBatches.push(selectedGenerator);
+      }
+      coverageFeedbackResult = {
+        provider: coverageSelection.provider,
+        batches,
+        generatorBatches,
+        features: allFeatures.size,
+        newFeatures: totalNewFeatures,
+      };
+    } finally {
+      await rm(coverageDirectory, { recursive: true, force: true });
+    }
+  } else if (restartPolicy === "per-case") {
     await Promise.all(Array.from({ length: Math.min(workers, scenarios.length) }, worker));
   } else {
     let session: TransportSession | undefined;
     try {
       for (let index = 0; index < scenarios.length && performance.now() < deadline; index += 1) {
-        const outcome = await recordCase(index, session);
+        const scenario = scenarios[index];
+        if (scenario === undefined) {
+          continue;
+        }
+        const outcome = await recordCase(scenario, index, session);
         session = outcome.session;
         if (outcome.stop) {
           break;
@@ -226,6 +396,12 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
   }
 
   const executed = caseResults.filter((item): item is NonNullable<typeof item> => item !== undefined);
+  const firstFindingCases: Record<string, number> = {};
+  for (let index = 0; index < caseResults.length; index += 1) {
+    for (const finding of caseResults[index]?.findings ?? []) {
+      firstFindingCases[finding.ruleId] ??= index + 1;
+    }
+  }
   const observedFindings = deduplicateFindings(executed.flatMap((item) => item.findings));
   const findings: Finding[] = [];
   const reproducers: Array<{ findingId: string; scenario: Scenario }> = [];
@@ -259,7 +435,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
       reproducers.push({ findingId: finding.id, scenario: origin.scenario });
     } else {
       diagnostics.push(
-        `Finding ${finding.id} was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`,
+        `Finding ${finding.id} (${finding.ruleId}) was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`,
       );
     }
   }
@@ -283,6 +459,10 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     diagnostics,
     corpusEntriesAdded,
     reproducers,
+    ...(Object.keys(firstFindingCases).length === 0
+      ? {}
+      : { firstFindingCases: Object.fromEntries(Object.entries(firstFindingCases).sort(([left], [right]) => left.localeCompare(right))) }),
+    ...(coverageFeedbackResult === undefined ? {} : { coverageFeedback: coverageFeedbackResult }),
     ...(baseline === undefined ? {} : { baseline }),
   };
 }
@@ -324,6 +504,44 @@ function compareBaseline(
     newFindingIds: [...currentIds].filter((id) => !baselineIds.has(id)).sort(),
     staleFindingIds: [...baselineIds].filter((id) => !currentIds.has(id)).sort(),
   };
+}
+
+function chooseCoverageGenerator(
+  generatorOrder: readonly string[],
+  weights: ReadonlyMap<string, number>,
+  stats: ReadonlyMap<string, { batches: number; newFeatures: number }>,
+  totalBatches: number,
+): string {
+  let selected: string | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const name of generatorOrder) {
+    const current = stats.get(name);
+    if (current === undefined) {
+      continue;
+    }
+    if (current.batches === 0) {
+      return name;
+    }
+    const weight = weights.get(name) ?? 1;
+    const exploitation = current.newFeatures / current.batches;
+    const exploration = Math.sqrt((2 * Math.log(totalBatches + 1)) / current.batches) * Math.sqrt(weight);
+    const score = exploitation + exploration;
+    if (score > bestScore) {
+      selected = name;
+      bestScore = score;
+    }
+  }
+  if (selected === undefined) {
+    throw new CoverageError("Coverage scheduler could not select a registered generator.");
+  }
+  return selected;
+}
+
+function findEnvironmentVariable(
+  environment: NodeJS.ProcessEnv | Record<string, string> | undefined,
+  requestedName: string,
+): string | undefined {
+  return Object.keys(environment ?? {}).find((name) => name.toUpperCase() === requestedName.toUpperCase());
 }
 
 export async function runSingleScenario(

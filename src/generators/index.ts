@@ -37,6 +37,7 @@ export function generateScenarios(
   names: readonly string[] = generatorNames,
   transport: GeneratorContext["transport"] = "stdio",
   argumentStrategies?: readonly ArgumentStrategySelection[],
+  startIndex = 0,
 ): Scenario[] {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
@@ -44,8 +45,9 @@ export function generateScenarios(
     return [];
   }
   const scenarios: Scenario[] = [];
-  for (let caseIndex = 0; scenarios.length < count; caseIndex += 1) {
-    const name = selected[caseIndex % selected.length];
+  for (let offset = 0; scenarios.length < count; offset += 1) {
+    const caseIndex = startIndex + offset;
+    const name = selected[offset % selected.length];
     if (name === undefined) {
       break;
     }

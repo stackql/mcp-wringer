@@ -37,6 +37,24 @@ npx mcp-wringer replay .mcp-wringer/reports/reproducers/<finding-id>.repro.json 
 npx mcp-wringer minimize .mcp-wringer/reports/reproducers/<finding-id>.repro.json --env NAME=VALUE
 ```
 
+## Experimental coverage feedback
+
+Coverage-guided scheduling is disabled by default. Enable it in the config file for a spawned stdio target:
+
+```json
+{
+  "coverageFeedback": {
+    "enabled": true,
+    "provider": "node-v8",
+    "batchSize": 8
+  },
+  "workers": 1,
+  "restartPolicy": "per-case"
+}
+```
+
+The built-in providers are `node-v8` and `go-cover`; `mcp-wringer list coverage-providers` lists registered providers. Node targets must run under Node. Go targets must be built with `go build -cover`, and the Go tool must be on `PATH` so coverage data can be converted. Coverage is collected after each generator batch, and newly covered ranges influence later generator selection. This mode requires a spawned stdio target, one worker, and `restartPolicy: "per-case"`. A target that fails before writing coverage still has its findings processed, but that batch may contribute no feedback. Coverage providers can also be registered by trusted plugins; see the [plugin guide](./docs/plugins.md).
+
 ## Run a Streamable HTTP test
 
 Attach to a local endpoint with `--url`:

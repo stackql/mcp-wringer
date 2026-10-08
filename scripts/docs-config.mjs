@@ -47,6 +47,8 @@ Built-in profiles are \`quick\`, \`standard\`, and \`deep\`. A \`profiles\` obje
 
 \`argumentStrategies\`, \`generators\`, \`oracles\`, and \`reporters\` are arrays of objects with a registry \`name\`, an \`enabled\` flag, and an \`options\` object. An empty argument strategy list enables all registered strategies. Generator selections also accept a positive \`weight\`; oracle selections accept a \`severityOverrides\` map from rule IDs to \`high\`, \`medium\`, \`low\`, or \`info\`. An empty generator list uses the built-in schedule, and an empty oracle list enables all registered oracles.
 
+\`coverageFeedback\` selects a provider by name, sets the batch size, and is disabled by default. When enabled, it requires a spawned stdio target, one worker, and \`restartPolicy: "per-case"\`. The built-in \`node-v8\` provider requires a Node target; \`go-cover\` requires a binary built with \`go build -cover\` and the Go tool on \`PATH\`. This feature is experimental.
+
 ## Baseline format
 
 A baseline is a JSON object containing format version 1 and unique finding IDs:

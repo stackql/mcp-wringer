@@ -1,5 +1,5 @@
-import { J as JsonValue, S as ScenarioGenerator, A as ArgumentStrategy, O as Oracle, R as Reporter } from '../types-H02eG7bl.js';
-export { a as ArgumentStrategyContext, b as ArgumentStrategySelection, F as Finding, c as FindingDraft, G as GeneratorContext, d as OracleContext, e as Scenario, f as ScenarioStep, g as SpecRevision, T as TraceEvent } from '../types-H02eG7bl.js';
+import { J as JsonValue, S as ScenarioGenerator, A as ArgumentStrategy, O as Oracle, R as Reporter, C as CoverageProvider } from '../types-Ivx6917u.js';
+export { a as ArgumentStrategyContext, b as ArgumentStrategySelection, c as CoverageFeedbackResult, d as CoverageSelection, F as Finding, e as FindingDraft, G as GeneratorContext, f as OracleContext, g as Scenario, h as ScenarioStep, i as SpecRevision, T as TraceEvent } from '../types-Ivx6917u.js';
 
 declare const configDefinition: {
     readonly $schema: "https://json-schema.org/draft/2020-12/schema";
@@ -136,6 +136,37 @@ declare const configDefinition: {
             };
             readonly default: readonly [];
             readonly description: "Argument strategy registry selections. Empty enables all registered strategies.";
+        };
+        readonly coverageFeedback: {
+            readonly type: "object";
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly default: false;
+                    readonly description: "Enable experimental coverage-guided generator scheduling.";
+                };
+                readonly provider: {
+                    readonly type: "string";
+                    readonly minLength: 1;
+                    readonly default: "node-v8";
+                    readonly description: "Coverage provider used to collect target coverage at batch boundaries.";
+                };
+                readonly batchSize: {
+                    readonly type: "integer";
+                    readonly minimum: 1;
+                    readonly maximum: 100;
+                    readonly default: 8;
+                    readonly description: "Scenarios per generator batch before coverage feedback is applied.";
+                };
+            };
+            readonly required: readonly ["enabled", "provider", "batchSize"];
+            readonly default: {
+                readonly enabled: false;
+                readonly provider: "node-v8";
+                readonly batchSize: 8;
+            };
+            readonly description: "Experimental coverage feedback. Requires a spawned stdio target, one worker, and restartPolicy 'per-case'.";
         };
         readonly failOn: {
             readonly default: "high";
@@ -286,7 +317,7 @@ declare const configDefinition: {
             readonly description: "User-defined named partial configuration profiles.";
         };
     };
-    readonly required: readonly ["$schema", "profile", "profiles", "specRevision", "cases", "durationMs", "workers", "restartPolicy", "timeoutMs", "confirmations", "transport", "args", "env", "inheritEnvironment", "allowNonLoopback", "allowTools", "argumentStrategies", "failOn", "reportDirectory", "corpusDirectory", "plugins", "generators", "oracles", "reporters"];
+    readonly required: readonly ["$schema", "profile", "profiles", "specRevision", "cases", "durationMs", "workers", "restartPolicy", "timeoutMs", "confirmations", "transport", "args", "env", "inheritEnvironment", "allowNonLoopback", "allowTools", "argumentStrategies", "coverageFeedback", "failOn", "reportDirectory", "corpusDirectory", "plugins", "generators", "oracles", "reporters"];
     readonly $defs: {
         readonly profile: {
             readonly type: "object";
@@ -420,6 +451,37 @@ declare const configDefinition: {
                     };
                     readonly default: readonly [];
                     readonly description: "Argument strategy registry selections. Empty enables all registered strategies.";
+                };
+                readonly coverageFeedback: {
+                    readonly type: "object";
+                    readonly additionalProperties: false;
+                    readonly properties: {
+                        readonly enabled: {
+                            readonly type: "boolean";
+                            readonly default: false;
+                            readonly description: "Enable experimental coverage-guided generator scheduling.";
+                        };
+                        readonly provider: {
+                            readonly type: "string";
+                            readonly minLength: 1;
+                            readonly default: "node-v8";
+                            readonly description: "Coverage provider used to collect target coverage at batch boundaries.";
+                        };
+                        readonly batchSize: {
+                            readonly type: "integer";
+                            readonly minimum: 1;
+                            readonly maximum: 100;
+                            readonly default: 8;
+                            readonly description: "Scenarios per generator batch before coverage feedback is applied.";
+                        };
+                    };
+                    readonly required: readonly ["enabled", "provider", "batchSize"];
+                    readonly default: {
+                        readonly enabled: false;
+                        readonly provider: "node-v8";
+                        readonly batchSize: 8;
+                    };
+                    readonly description: "Experimental coverage feedback. Requires a spawned stdio target, one worker, and restartPolicy 'per-case'.";
                 };
                 readonly failOn: {
                     readonly default: "high";
@@ -596,6 +658,7 @@ interface PluginApi {
     registerArgumentStrategy(name: string, strategy: ArgumentStrategy): void;
     registerOracle(name: string, oracle: Oracle): void;
     registerReporter(name: string, reporter: Reporter): void;
+    registerCoverageProvider(name: string, provider: CoverageProvider): void;
     registerProfile(name: string, profile: ProfileConfig): void;
 }
 interface WringerPlugin {
@@ -605,4 +668,4 @@ interface WringerPlugin {
 }
 declare const pluginApi: PluginApi;
 
-export { ArgumentStrategy, JsonValue, Oracle, type PluginApi, type ProfileConfig, Reporter, ScenarioGenerator, WRINGER_PLUGIN_API_VERSION, type WringerPlugin, pluginApi };
+export { ArgumentStrategy, CoverageProvider, JsonValue, Oracle, type PluginApi, type ProfileConfig, Reporter, ScenarioGenerator, WRINGER_PLUGIN_API_VERSION, type WringerPlugin, pluginApi };

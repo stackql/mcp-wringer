@@ -38,6 +38,8 @@ export async function writeRunReports(options: RunReportOptions): Promise<string
     durationMs: run.durationMs,
     corpusEntriesAdded: run.corpusEntriesAdded,
     diagnostics: run.diagnostics,
+    ...(run.firstFindingCases === undefined ? {} : { firstFindingCases: run.firstFindingCases }),
+    ...(run.coverageFeedback === undefined ? {} : { coverageFeedback: run.coverageFeedback }),
     ...(run.baseline === undefined ? {} : { baseline: run.baseline }),
   };
   await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");

@@ -39,6 +39,7 @@
     "check:package": "npm pack --dry-run --json --ignore-scripts | node scripts/check-package.mjs",
     "docs:config": "node ./scripts/docs-config.mjs",
     "docs:config:check": "npm run docs:config && git diff --exit-code -- docs/config-reference.md config.schema.json",
+    "evaluate:coverage-feedback": "npm run build && node scripts/evaluate-coverage-feedback.mjs",
     "lint": "eslint .",
     "spec:sync": "node ./scripts/spec-sync.mjs",
     "test": "vitest run",

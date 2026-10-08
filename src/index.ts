@@ -24,6 +24,12 @@ export { runHttpScenario, HttpScenarioSession } from "./transports/http/runner.j
 export type { HttpRunResult } from "./transports/http/runner.js";
 export type { TransportAdapter, TransportRunOptions, TransportRunResult, TransportSession, TransportTargetOptions } from "./transports/types.js";
 export { transportRegistry } from "./transports/registry.js";
+export { coverageProviderRegistry, goCoverageProvider, nodeV8CoverageProvider } from "./coverage-feedback/index.js";
+export type {
+  CoverageFeedbackResult,
+  CoverageProvider,
+  CoverageSelection,
+} from "./coverage-feedback/types.js";
 export { runFuzz, runSingleScenario } from "./core/run.js";
 export type { FuzzRunOptions, FuzzRunResult } from "./core/run.js";
 export { evaluateOracles, oracleRegistry } from "./oracles/index.js";

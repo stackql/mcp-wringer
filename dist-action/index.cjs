@@ -7956,8 +7956,8 @@ var require__ = __commonJS({
 
 // src/action/index.ts
 var import_node_crypto4 = require("crypto");
-var import_promises6 = require("fs/promises");
-var import_node_path6 = require("path");
+var import_promises8 = require("fs/promises");
+var import_node_path8 = require("path");
 
 // src/core/errors.ts
 var WringerError = class extends Error {
@@ -7988,6 +7988,11 @@ var TransportError = class extends WringerError {
     super("TRANSPORT_ERROR", message, options);
   }
 };
+var CoverageError = class extends WringerError {
+  constructor(message, options) {
+    super("COVERAGE_ERROR", message, options);
+  }
+};
 
 // src/core/seed.ts
 var import_node_crypto = require("crypto");
@@ -8016,9 +8021,10 @@ function deriveSeed(rootSeed, ...labels) {
 }
 
 // src/core/run.ts
-var import_promises2 = require("fs/promises");
+var import_promises4 = require("fs/promises");
+var import_node_os2 = require("os");
 var import_node_perf_hooks3 = require("perf_hooks");
-var import_node_path2 = require("path");
+var import_node_path4 = require("path");
 
 // src/core/safety.ts
 function assertScenarioSafety(scenario, surface, policy = {}) {
@@ -15020,15 +15026,16 @@ function register(name, generator) {
 for (const name of generatorNames) {
   register(name, { generate: (context) => generateByName(name, context) });
 }
-function generateScenarios(revision, surface, seed, count, names = generatorNames, transport = "stdio", argumentStrategies) {
+function generateScenarios(revision, surface, seed, count, names = generatorNames, transport = "stdio", argumentStrategies, startIndex = 0) {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
   if (selected.length === 0 || count <= 0) {
     return [];
   }
   const scenarios = [];
-  for (let caseIndex = 0; scenarios.length < count; caseIndex += 1) {
-    const name = selected[caseIndex % selected.length];
+  for (let offset = 0; scenarios.length < count; offset += 1) {
+    const caseIndex = startIndex + offset;
+    const name = selected[offset % selected.length];
     if (name === void 0) {
       break;
     }
@@ -15260,6 +15267,116 @@ function idOf(value) {
   const object = asObject(value);
   return typeof object.id === "string" || typeof object.id === "number" ? object.id : "generated";
 }
+
+// src/coverage-feedback/registry.ts
+var coverageProviderRegistry = new ExtensionRegistry();
+
+// src/coverage-feedback/go-cover.ts
+var import_node_child_process2 = require("child_process");
+var import_promises2 = require("fs/promises");
+var import_node_os = require("os");
+var import_node_path2 = require("path");
+var import_node_util = require("util");
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process2.execFile);
+var goCoverageProvider = {
+  environmentVariable: "GOCOVERDIR",
+  async collect(directory) {
+    const entries = await (0, import_promises2.readdir)(directory);
+    if (!entries.some((name) => name.startsWith("covmeta.")) || !entries.some((name) => name.startsWith("covcounters."))) {
+      throw new CoverageError(
+        "Go coverage data is missing. Build the target with 'go build -cover' and ensure it exits cleanly."
+      );
+    }
+    const temporaryDirectory = await (0, import_promises2.mkdtemp)((0, import_node_path2.join)((0, import_node_os.tmpdir)(), "mcp-wringer-go-cover-"));
+    const profilePath = (0, import_node_path2.join)(temporaryDirectory, "coverage.out");
+    try {
+      try {
+        await execFileAsync("go", ["tool", "covdata", "textfmt", `-i=${directory}`, `-o=${profilePath}`], {
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024
+        });
+      } catch (error) {
+        throw new CoverageError(
+          `Could not read Go coverage data. Build the target with 'go build -cover' and ensure Go is on PATH: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      const profile = await (0, import_promises2.readFile)(profilePath, "utf8");
+      const covered = /* @__PURE__ */ new Set();
+      for (const line of profile.split(/\r?\n/u)) {
+        if (line.length === 0 || line.startsWith("mode:")) {
+          continue;
+        }
+        const match = /^(.+):(\d+)\.(\d+),(\d+)\.(\d+) (\d+) (\d+)$/u.exec(line);
+        if (match === null) {
+          throw new CoverageError(`Go coverage profile contains an unrecognized entry: '${line}'.`);
+        }
+        if (Number(match[7]) > 0) {
+          covered.add(`${match[1]}:${match[2]}.${match[3]}-${match[4]}.${match[5]}`);
+        }
+      }
+      return covered;
+    } finally {
+      await (0, import_promises2.rm)(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+};
+
+// src/coverage-feedback/node-v8.ts
+var import_promises3 = require("fs/promises");
+var import_node_path3 = require("path");
+var nodeV8CoverageProvider = {
+  environmentVariable: "NODE_V8_COVERAGE",
+  async collect(directory) {
+    const files = (await (0, import_promises3.readdir)(directory)).filter((name) => name.endsWith(".json")).sort();
+    if (files.length === 0) {
+      throw new CoverageError("Node V8 coverage produced no JSON files; ensure the target is a Node process.");
+    }
+    const covered = /* @__PURE__ */ new Set();
+    for (const name of files) {
+      const path = (0, import_node_path3.join)(directory, name);
+      let document;
+      try {
+        const value = JSON.parse(await (0, import_promises3.readFile)(path, "utf8"));
+        if (!isCoverageDocument(value)) {
+          throw new Error("Expected a V8 coverage document with a result array.");
+        }
+        document = value;
+      } catch (error) {
+        throw new CoverageError(
+          `Could not parse Node V8 coverage file '${path}': ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      for (const script of document.result) {
+        if (script.url === void 0) {
+          continue;
+        }
+        for (const fn of script.functions ?? []) {
+          for (const range of fn.ranges ?? []) {
+            if (range.count !== void 0 && range.count > 0 && range.startOffset !== void 0 && range.endOffset !== void 0) {
+              covered.add(`${script.url}:${range.startOffset}-${range.endOffset}`);
+            }
+          }
+        }
+      }
+    }
+    return covered;
+  }
+};
+function isCoverageDocument(value) {
+  return isRecord8(value) && Array.isArray(value.result) && value.result.every((script) => isRecord8(script) && (script.url === void 0 || typeof script.url === "string") && (script.functions === void 0 || Array.isArray(script.functions) && script.functions.every((fn) => isRecord8(fn) && (fn.ranges === void 0 || Array.isArray(fn.ranges) && fn.ranges.every((range) => isRecord8(range) && isOptionalNonnegativeInteger(range.startOffset) && isOptionalNonnegativeInteger(range.endOffset) && isOptionalNonnegativeInteger(range.count))))));
+}
+function isRecord8(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isOptionalNonnegativeInteger(value) {
+  return value === void 0 || typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+// src/coverage-feedback/index.ts
+coverageProviderRegistry.register("go-cover", goCoverageProvider);
+coverageProviderRegistry.register("node-v8", nodeV8CoverageProvider);
 
 // src/oracles/registry.ts
 var oracleRegistry = new ExtensionRegistry();
@@ -23854,7 +23971,7 @@ function indexRequestsById(requests) {
   return index;
 }
 function isJsonRpcMessage(value) {
-  if (!isRecord8(value) || value.jsonrpc !== "2.0") {
+  if (!isRecord9(value) || value.jsonrpc !== "2.0") {
     return false;
   }
   if (typeof value.method === "string") {
@@ -23869,9 +23986,9 @@ function idKey(value) {
   return `${typeof value}:${String(value)}`;
 }
 function asRecord2(value) {
-  return isRecord8(value) ? value : void 0;
+  return isRecord9(value) ? value : void 0;
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function firstError(errors) {
@@ -24021,7 +24138,42 @@ async function runFuzz(options) {
   }
   const target = getTargetOptions(options);
   const transportName = target.transport ?? "stdio";
-  const scenarios = generateScenarios(
+  const coverageSelection = options.coverageFeedback;
+  let coverageProvider;
+  let coverageDirectory;
+  let coverageTarget;
+  if (coverageSelection !== void 0) {
+    if (target.transport !== "stdio" || workers !== 1 || restartPolicy !== "per-case") {
+      throw new CoverageError(
+        "Coverage feedback requires a spawned stdio target, workers=1, and restartPolicy='per-case'."
+      );
+    }
+    if (!Number.isInteger(coverageSelection.batchSize) || coverageSelection.batchSize < 1 || coverageSelection.batchSize > 100) {
+      throw new CoverageError("Coverage feedback batchSize must be an integer from 1 to 100.");
+    }
+    coverageProvider = coverageProviderRegistry.get(coverageSelection.provider);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(coverageProvider.environmentVariable)) {
+      throw new CoverageError(
+        `Coverage provider '${coverageSelection.provider}' declares an invalid environment variable name.`
+      );
+    }
+    const configuredCoverageVariable = findEnvironmentVariable(target.env, coverageProvider.environmentVariable);
+    const inheritedCoverageVariable = options.inheritEnvironment ? findEnvironmentVariable(process.env, coverageProvider.environmentVariable) : void 0;
+    if (configuredCoverageVariable !== void 0 || inheritedCoverageVariable !== void 0) {
+      throw new CoverageError(
+        `Do not set ${configuredCoverageVariable ?? inheritedCoverageVariable} in target environment while coverage feedback is enabled.`
+      );
+    }
+    coverageDirectory = await (0, import_promises4.mkdtemp)((0, import_node_path4.join)((0, import_node_os2.tmpdir)(), "mcp-wringer-coverage-"));
+    coverageTarget = {
+      ...target,
+      env: {
+        ...target.env,
+        [coverageProvider.environmentVariable]: coverageDirectory
+      }
+    };
+  }
+  const scenarios = coverageSelection === void 0 ? generateScenarios(
     options.revision,
     surface,
     seed,
@@ -24029,29 +24181,27 @@ async function runFuzz(options) {
     options.generatorSequence ?? defaultGeneratorSequence,
     transportName,
     options.argumentStrategies
-  );
+  ) : [];
   const deadline = startedAt + durationLimitMs;
-  const caseResults = Array.from({ length: scenarios.length });
+  const caseResults = Array.from({ length: caseLimit });
   let nextIndex = 0;
   let corpusEntriesAdded = 0;
-  const corpusDirectory = options.corpusDirectory ?? (0, import_node_path2.resolve)(".mcp-wringer", "corpus");
+  const corpusDirectory = options.corpusDirectory ?? (0, import_node_path4.resolve)(".mcp-wringer", "corpus");
   const adapter = transportRegistry.get(transportName);
-  const recordCase = async (index, session) => {
-    const generated = scenarios[index];
-    if (generated === void 0) {
-      return { ...session === void 0 ? {} : { session } };
-    }
+  const recordCase = async (generated, index, session, runTarget = target) => {
     const scenario = addHealthChecks(generated, session === void 0);
     assertScenarioSafety(scenario, surface, options.safety);
-    const currentSession = session ?? adapter.createSession({ ...target, scenario });
-    const result = await currentSession.execute(scenario, { closeAfterScenario: restartPolicy === "per-case" });
+    const currentSession = session ?? adapter.createSession({ ...runTarget, scenario });
+    const result = await currentSession.execute(scenario, {
+      closeAfterScenario: restartPolicy === "per-case" || coverageSelection !== void 0
+    });
     const context = createOracleContext(scenario, result, options.revision);
     const findings2 = evaluateOracles(context, options.oracleSelections);
     caseResults[index] = { scenario, context, findings: findings2 };
     if (await recordNovelScenario(corpusDirectory, scenario, result.trace, seed)) {
       corpusEntriesAdded += 1;
     }
-    if (restartPolicy === "per-case") {
+    if (restartPolicy === "per-case" || coverageSelection !== void 0) {
       return {};
     }
     const targetExited = result.outcome.exitCode !== null || result.outcome.signal !== null;
@@ -24073,16 +24223,131 @@ async function runFuzz(options) {
       if (index >= scenarios.length || import_node_perf_hooks3.performance.now() >= deadline) {
         return;
       }
-      await recordCase(index);
+      const scenario = scenarios[index];
+      if (scenario !== void 0) {
+        await recordCase(scenario, index);
+      }
     }
   };
-  if (restartPolicy === "per-case") {
+  let coverageFeedbackResult;
+  if (coverageSelection !== void 0 && coverageProvider !== void 0 && coverageDirectory !== void 0 && coverageTarget !== void 0) {
+    const selectedSequence = options.generatorSequence ?? defaultGeneratorSequence;
+    const availableNames = generatorRegistry.names();
+    const weights = /* @__PURE__ */ new Map();
+    for (const name of selectedSequence) {
+      if (availableNames.includes(name)) {
+        weights.set(name, (weights.get(name) ?? 0) + 1);
+      }
+    }
+    if (weights.size === 0) {
+      await (0, import_promises4.rm)(coverageDirectory, { recursive: true, force: true });
+      throw new CoverageError("Coverage feedback requires at least one registered generator in generatorSequence.");
+    }
+    const generatorOrder = [...weights.keys()];
+    const generatorStats = new Map(generatorOrder.map((name) => [name, { batches: 0, newFeatures: 0 }]));
+    const allFeatures = /* @__PURE__ */ new Set();
+    let totalNewFeatures = 0;
+    let batches = 0;
+    const generatorBatches = [];
+    let caseIndex = 0;
+    try {
+      while (caseIndex < caseLimit && import_node_perf_hooks3.performance.now() < deadline) {
+        const selectedGenerator = chooseCoverageGenerator(generatorOrder, weights, generatorStats, batches);
+        const batchSize = Math.min(coverageSelection.batchSize, caseLimit - caseIndex);
+        const batchStartIndex = caseIndex;
+        const batchScenarios = generateScenarios(
+          options.revision,
+          surface,
+          seed,
+          batchSize,
+          [selectedGenerator],
+          transportName,
+          options.argumentStrategies,
+          caseIndex
+        );
+        let session;
+        let completedCases = 0;
+        try {
+          for (let offset = 0; offset < batchScenarios.length && import_node_perf_hooks3.performance.now() < deadline; offset += 1) {
+            const scenario = batchScenarios[offset];
+            if (scenario === void 0) {
+              continue;
+            }
+            const index = caseIndex + offset;
+            const outcome = await recordCase(scenario, index, session, coverageTarget);
+            session = outcome.session;
+            if (caseResults[index] !== void 0) {
+              completedCases += 1;
+            }
+            if (outcome.stop) {
+              break;
+            }
+          }
+        } finally {
+          if (session !== void 0) {
+            await session.close();
+          }
+        }
+        caseIndex += completedCases;
+        if (completedCases === 0) {
+          break;
+        }
+        const batchTargetFailed = caseResults.slice(batchStartIndex, batchStartIndex + completedCases).some((item) => item !== void 0 && (item.context.outcome.failure !== void 0 || item.context.outcome.exitCode !== null || item.context.outcome.signal !== null));
+        let currentFeatures;
+        let coverageUnavailable = false;
+        try {
+          currentFeatures = await coverageProvider.collect(coverageDirectory);
+        } catch (error) {
+          if (!(error instanceof CoverageError) || !batchTargetFailed) {
+            throw error;
+          }
+          diagnostics.push(
+            `Coverage feedback was unavailable after a failed target batch: ${error.message}`
+          );
+          currentFeatures = /* @__PURE__ */ new Set();
+          coverageUnavailable = true;
+        }
+        if (batchTargetFailed && currentFeatures.size === 0 && !coverageUnavailable) {
+          diagnostics.push("Coverage feedback reported no executed features after a failed target batch.");
+        }
+        let newlyCovered = 0;
+        for (const feature of currentFeatures) {
+          if (!allFeatures.has(feature)) {
+            allFeatures.add(feature);
+            newlyCovered += 1;
+          }
+        }
+        const stats = generatorStats.get(selectedGenerator);
+        if (stats === void 0) {
+          throw new CoverageError(`Coverage scheduler lost generator '${selectedGenerator}'.`);
+        }
+        stats.batches += 1;
+        stats.newFeatures += newlyCovered;
+        totalNewFeatures += newlyCovered;
+        batches += 1;
+        generatorBatches.push(selectedGenerator);
+      }
+      coverageFeedbackResult = {
+        provider: coverageSelection.provider,
+        batches,
+        generatorBatches,
+        features: allFeatures.size,
+        newFeatures: totalNewFeatures
+      };
+    } finally {
+      await (0, import_promises4.rm)(coverageDirectory, { recursive: true, force: true });
+    }
+  } else if (restartPolicy === "per-case") {
     await Promise.all(Array.from({ length: Math.min(workers, scenarios.length) }, worker));
   } else {
     let session;
     try {
       for (let index = 0; index < scenarios.length && import_node_perf_hooks3.performance.now() < deadline; index += 1) {
-        const outcome = await recordCase(index, session);
+        const scenario = scenarios[index];
+        if (scenario === void 0) {
+          continue;
+        }
+        const outcome = await recordCase(scenario, index, session);
         session = outcome.session;
         if (outcome.stop) {
           break;
@@ -24095,6 +24360,12 @@ async function runFuzz(options) {
     }
   }
   const executed = caseResults.filter((item) => item !== void 0);
+  const firstFindingCases = {};
+  for (let index = 0; index < caseResults.length; index += 1) {
+    for (const finding of caseResults[index]?.findings ?? []) {
+      firstFindingCases[finding.ruleId] ??= index + 1;
+    }
+  }
   const observedFindings = deduplicateFindings(executed.flatMap((item) => item.findings));
   const findings = [];
   const reproducers = [];
@@ -24128,7 +24399,7 @@ async function runFuzz(options) {
       reproducers.push({ findingId: finding.id, scenario: origin.scenario });
     } else {
       diagnostics.push(
-        `Finding ${finding.id} was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`
+        `Finding ${finding.id} (${finding.ruleId}) was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`
       );
     }
   }
@@ -24150,13 +24421,15 @@ async function runFuzz(options) {
     diagnostics,
     corpusEntriesAdded,
     reproducers,
+    ...Object.keys(firstFindingCases).length === 0 ? {} : { firstFindingCases: Object.fromEntries(Object.entries(firstFindingCases).sort(([left], [right]) => left.localeCompare(right))) },
+    ...coverageFeedbackResult === void 0 ? {} : { coverageFeedback: coverageFeedbackResult },
     ...baseline === void 0 ? {} : { baseline }
   };
 }
 async function readBaseline(baselinePath) {
   let text;
   try {
-    text = await (0, import_promises2.readFile)((0, import_node_path2.resolve)(baselinePath), "utf8");
+    text = await (0, import_promises4.readFile)((0, import_node_path4.resolve)(baselinePath), "utf8");
   } catch (error) {
     throw new ScenarioError(
       `Could not read baseline '${baselinePath}': ${error instanceof Error ? error.message : String(error)}`
@@ -24170,7 +24443,7 @@ async function readBaseline(baselinePath) {
       `Baseline '${baselinePath}' is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  if (!isRecord9(value) || value.formatVersion !== 1 || !Array.isArray(value.findingIds) || !value.findingIds.every((id) => typeof id === "string" && id.length > 0) || new Set(value.findingIds).size !== value.findingIds.length) {
+  if (!isRecord10(value) || value.formatVersion !== 1 || !Array.isArray(value.findingIds) || !value.findingIds.every((id) => typeof id === "string" && id.length > 0) || new Set(value.findingIds).size !== value.findingIds.length) {
     throw new ScenarioError(
       `Baseline '${baselinePath}' must contain formatVersion 1 and a unique string array named findingIds.`
     );
@@ -24185,6 +24458,34 @@ function compareBaseline(findingIds, findings) {
     staleFindingIds: [...baselineIds].filter((id) => !currentIds.has(id)).sort()
   };
 }
+function chooseCoverageGenerator(generatorOrder, weights, stats, totalBatches) {
+  let selected;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const name of generatorOrder) {
+    const current = stats.get(name);
+    if (current === void 0) {
+      continue;
+    }
+    if (current.batches === 0) {
+      return name;
+    }
+    const weight = weights.get(name) ?? 1;
+    const exploitation = current.newFeatures / current.batches;
+    const exploration = Math.sqrt(2 * Math.log(totalBatches + 1) / current.batches) * Math.sqrt(weight);
+    const score = exploitation + exploration;
+    if (score > bestScore) {
+      selected = name;
+      bestScore = score;
+    }
+  }
+  if (selected === void 0) {
+    throw new CoverageError("Coverage scheduler could not select a registered generator.");
+  }
+  return selected;
+}
+function findEnvironmentVariable(environment, requestedName) {
+  return Object.keys(environment ?? {}).find((name) => name.toUpperCase() === requestedName.toUpperCase());
+}
 async function runSingleScenario(options) {
   const scenario = addHealthChecks(options.scenario);
   assertScenarioSafety(scenario, options.surface, options.safety);
@@ -24194,12 +24495,12 @@ async function runSingleScenario(options) {
   return { scenario, result, context, findings: evaluateOracles(context, options.oracleSelections) };
 }
 function addHealthChecks(scenario, includeLifecycle = true) {
-  if (scenario.steps.some((step) => step.type === "send" && isRecord9(step.message) && [scenario.id + "-baseline-before", scenario.id + "-liveness", scenario.id + "-baseline-after"].includes(String(step.message.id)))) {
+  if (scenario.steps.some((step) => step.type === "send" && isRecord10(step.message) && [scenario.id + "-baseline-before", scenario.id + "-liveness", scenario.id + "-baseline-after"].includes(String(step.message.id)))) {
     return scenario;
   }
   const profile = specProfiles.get(scenario.specRevision);
   const lifecycleStepCount = profile.lifecycleSteps(`${scenario.id}-lifecycle`).length;
-  const hasDiscoveryBootstrap = scenario.specRevision === "2026-07-28" && scenario.steps[0]?.type === "send" && isRecord9(scenario.steps[0].message) && scenario.steps[0].message.method === "server/discover" && scenario.steps[0].message.id === `${scenario.id}-discover` && scenario.steps[1]?.type === "await-response" && scenario.steps[1].id === scenario.steps[0].message.id;
+  const hasDiscoveryBootstrap = scenario.specRevision === "2026-07-28" && scenario.steps[0]?.type === "send" && isRecord10(scenario.steps[0].message) && scenario.steps[0].message.method === "server/discover" && scenario.steps[0].message.id === `${scenario.id}-discover` && scenario.steps[1]?.type === "await-response" && scenario.steps[1].id === scenario.steps[0].message.id;
   const prefixStepCount = lifecycleStepCount + (hasDiscoveryBootstrap ? 2 : 0);
   const prefix = includeLifecycle ? scenario.steps.slice(0, prefixStepCount) : [];
   const existingSteps = scenario.steps.slice(prefixStepCount);
@@ -24271,7 +24572,7 @@ function getTargetOptions(options) {
 function expectedInvalidRequestErrors(scenario, code) {
   const expected = [];
   for (const step of scenario.steps) {
-    if (step.type !== "send" || !isRecord9(step.message)) {
+    if (step.type !== "send" || !isRecord10(step.message)) {
       continue;
     }
     const id = step.message.id;
@@ -24283,24 +24584,24 @@ function expectedInvalidRequestErrors(scenario, code) {
 }
 function getResultById(responses, id) {
   const response = getResponseById(responses, id);
-  if (response === void 0 || !isRecord9(response) || !("result" in response)) {
+  if (response === void 0 || !isRecord10(response) || !("result" in response)) {
     return void 0;
   }
   return response.result;
 }
 function getResponseById(responses, id) {
-  return responses.find((response) => isRecord9(response) && response.id === id);
+  return responses.find((response) => isRecord10(response) && response.id === id);
 }
 function isErrorResponse(value) {
-  return isRecord9(value) && "error" in value;
+  return isRecord10(value) && "error" in value;
 }
-function isRecord9(value) {
+function isRecord10(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/config/load.ts
-var import_promises3 = require("fs/promises");
-var import_node_path4 = require("path");
+var import_promises5 = require("fs/promises");
+var import_node_path6 = require("path");
 var import__2 = __toESM(require__(), 1);
 
 // src/reporters/console.ts
@@ -24437,7 +24738,7 @@ reporterRegistry.register("markdown", markdownReporter);
 reporterRegistry.register("sarif", sarifReporter);
 
 // src/plugin/loader.ts
-var import_node_path3 = require("path");
+var import_node_path5 = require("path");
 var import_node_url = require("url");
 
 // src/config/profiles.ts
@@ -24461,6 +24762,9 @@ var pluginApi = {
   },
   registerReporter(name, reporter) {
     reporterRegistry.register(name, reporter);
+  },
+  registerCoverageProvider(name, provider) {
+    coverageProviderRegistry.register(name, provider);
   },
   registerProfile(name, profile) {
     profileRegistry.register(name, profile);
@@ -24508,13 +24812,13 @@ function getPluginUrl(specifier, baseDirectory) {
   if (specifier.startsWith("file:")) {
     return new URL(specifier).href;
   }
-  if (specifier.startsWith(".") || (0, import_node_path3.isAbsolute)(specifier) || specifier.includes("\\")) {
-    return (0, import_node_url.pathToFileURL)((0, import_node_path3.resolve)(baseDirectory, specifier)).href;
+  if (specifier.startsWith(".") || (0, import_node_path5.isAbsolute)(specifier) || specifier.includes("\\")) {
+    return (0, import_node_url.pathToFileURL)((0, import_node_path5.resolve)(baseDirectory, specifier)).href;
   }
   return specifier;
 }
 function getDefaultPlugin(value, specifier) {
-  if (!isRecord10(value) || !("default" in value) || !isRecord10(value.default)) {
+  if (!isRecord11(value) || !("default" in value) || !isRecord11(value.default)) {
     throw new WringerError("PLUGIN_ERROR", `Plugin '${specifier}' must provide a default plugin object.`);
   }
   const candidate = value.default;
@@ -24526,7 +24830,7 @@ function getDefaultPlugin(value, specifier) {
 function isWringerPlugin(value) {
   return value.apiVersion === WRINGER_PLUGIN_API_VERSION && typeof value.name === "string" && value.name.length > 0 && typeof value.register === "function";
 }
-function isRecord10(value) {
+function isRecord11(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -24669,6 +24973,33 @@ var commonProperties = {
     default: [],
     description: "Argument strategy registry selections. Empty enables all registered strategies."
   },
+  coverageFeedback: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: {
+        type: "boolean",
+        default: false,
+        description: "Enable experimental coverage-guided generator scheduling."
+      },
+      provider: {
+        type: "string",
+        minLength: 1,
+        default: "node-v8",
+        description: "Coverage provider used to collect target coverage at batch boundaries."
+      },
+      batchSize: {
+        type: "integer",
+        minimum: 1,
+        maximum: 100,
+        default: 8,
+        description: "Scenarios per generator batch before coverage feedback is applied."
+      }
+    },
+    required: ["enabled", "provider", "batchSize"],
+    default: { enabled: false, provider: "node-v8", batchSize: 8 },
+    description: "Experimental coverage feedback. Requires a spawned stdio target, one worker, and restartPolicy 'per-case'."
+  },
   failOn: {
     ...severitySchema,
     default: "high",
@@ -24764,6 +25095,7 @@ var configDefinition = {
     "allowNonLoopback",
     "allowTools",
     "argumentStrategies",
+    "coverageFeedback",
     "failOn",
     "reportDirectory",
     "corpusDirectory",
@@ -24787,16 +25119,16 @@ async function loadConfiguration(options = {}) {
   const environment = options.environment ?? process.env;
   const envConfigPath = environment.MCP_WRINGER_CONFIG;
   const configPath = options.configPath ?? envConfigPath;
-  const path = (0, import_node_path4.resolve)(configPath ?? defaultConfigPath);
+  const path = (0, import_node_path6.resolve)(configPath ?? defaultConfigPath);
   const fileConfig = await readConfigFile(path, configPath !== void 0);
   validatePartialConfig(fileConfig, path);
   const environmentConfig = readEnvironmentConfig(environment);
   const defaults = createDefaultConfig();
   const selection = mergeConfig(defaults, fileConfig, environmentConfig, options.overrides ?? {});
   const pluginSpecifiers = selection.plugins;
-  await loadConfiguredPlugins(pluginSpecifiers, configPath === void 0 ? process.cwd() : (0, import_node_path4.dirname)(path));
+  await loadConfiguredPlugins(pluginSpecifiers, configPath === void 0 ? process.cwd() : (0, import_node_path6.dirname)(path));
   const selectedProfile = selection.profile;
-  const fileProfiles = isRecord11(fileConfig.profiles) ? fileConfig.profiles : {};
+  const fileProfiles = isRecord12(fileConfig.profiles) ? fileConfig.profiles : {};
   const profile = fileProfiles[selectedProfile] ?? getRegisteredProfile(selectedProfile);
   const config = mergeConfig(defaults, profile, fileConfig, environmentConfig, options.overrides ?? {});
   normalizeExtensionDefaults(config);
@@ -24815,12 +25147,12 @@ async function loadConfiguration(options = {}) {
   };
 }
 function fileConfigPathWasRead(configPath, environment, resolvedPath) {
-  return configPath !== void 0 || environment.MCP_WRINGER_CONFIG !== void 0 || resolvedPath === (0, import_node_path4.resolve)(defaultConfigPath);
+  return configPath !== void 0 || environment.MCP_WRINGER_CONFIG !== void 0 || resolvedPath === (0, import_node_path6.resolve)(defaultConfigPath);
 }
 async function readConfigFile(path, required) {
   let contents;
   try {
-    contents = await (0, import_promises3.readFile)(path, "utf8");
+    contents = await (0, import_promises5.readFile)(path, "utf8");
   } catch (error) {
     if (!required && isNodeError3(error) && error.code === "ENOENT") {
       return {};
@@ -24841,7 +25173,7 @@ async function readConfigFile(path, required) {
       { cause: error }
     );
   }
-  if (!isRecord11(value)) {
+  if (!isRecord12(value)) {
     throw new WringerError("CONFIG_ERROR", `Configuration file '${path}' must contain a JSON object.`);
   }
   return value;
@@ -24899,7 +25231,7 @@ function parseEnvironmentValue(value, key) {
     }
     return value === "true";
   }
-  if (["args", "env", "allowTools", "argumentStrategies", "plugins", "generators", "oracles", "reporters", "profiles"].includes(key)) {
+  if (["args", "env", "allowTools", "argumentStrategies", "coverageFeedback", "plugins", "generators", "oracles", "reporters", "profiles"].includes(key)) {
     try {
       return JSON.parse(value);
     } catch (error) {
@@ -24924,9 +25256,9 @@ function mergeConfig(...layers) {
 }
 function mergeObject(target, source) {
   for (const [key, value] of Object.entries(source)) {
-    if (isRecord11(value) && isRecord11(target[key])) {
+    if (isRecord12(value) && isRecord12(target[key])) {
       mergeObject(target[key], value);
-    } else if (isRecord11(value)) {
+    } else if (isRecord12(value)) {
       const nested = {};
       mergeObject(nested, value);
       target[key] = nested;
@@ -24963,6 +25295,7 @@ function validateExtensionNames(config) {
   for (const selection of config.argumentStrategies) {
     assertRegistered("argument strategy", selection.name, argumentStrategyRegistry.names());
   }
+  assertRegistered("coverage provider", config.coverageFeedback.provider, coverageProviderRegistry.names());
   if (config.argumentStrategies.length > 0 && !config.argumentStrategies.some((selection) => selection.enabled)) {
     throw new WringerError("CONFIG_ERROR", "At least one argument strategy must be enabled.");
   }
@@ -25036,7 +25369,7 @@ function editDistance(left, right) {
   return row[right.length] ?? 0;
 }
 function markOrigins(value, prefix, origin, origins) {
-  if (isRecord11(value)) {
+  if (isRecord12(value)) {
     const entries = Object.entries(value);
     if (entries.length === 0 && prefix.length > 0) {
       origins[prefix] = origin;
@@ -25060,7 +25393,7 @@ function formatValidationErrors(errors, value, label) {
   if (error === void 0) {
     return `Invalid ${label}.`;
   }
-  if (error.keyword === "additionalProperties" && isRecord11(value)) {
+  if (error.keyword === "additionalProperties" && isRecord12(value)) {
     const unknown = error.params?.additionalProperty;
     if (typeof unknown === "string") {
       const suggestion = nearestName(unknown, Object.keys(configDefinition.properties));
@@ -25070,7 +25403,7 @@ function formatValidationErrors(errors, value, label) {
   const path = error.instancePath ?? "";
   return `Invalid ${label}${path.length === 0 ? "" : ` at ${path}`}: ${error.message ?? "validation failed"}.`;
 }
-function isRecord11(value) {
+function isRecord12(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNodeError3(error) {
@@ -25078,16 +25411,16 @@ function isNodeError3(error) {
 }
 
 // src/reporters/run.ts
-var import_promises5 = require("fs/promises");
-var import_node_path5 = require("path");
+var import_promises7 = require("fs/promises");
+var import_node_path7 = require("path");
 
 // src/core/reproducer.ts
-var import_promises4 = require("fs/promises");
+var import_promises6 = require("fs/promises");
 
 // src/core/scenario.ts
 var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 function validateScenario(value) {
-  if (!isRecord12(value) || value.formatVersion !== 1 || typeof value.id !== "string") {
+  if (!isRecord13(value) || value.formatVersion !== 1 || typeof value.id !== "string") {
     throw new ScenarioError("Scenario must have formatVersion 1 and a string id.");
   }
   assertOnlyKeys(value, ["formatVersion", "id", "specRevision", "description", "steps"], "Scenario");
@@ -25103,14 +25436,14 @@ function validateScenario(value) {
   value.steps.forEach((step, index) => validateStep(step, index));
 }
 function validateReproducer(value) {
-  if (!isRecord12(value) || value.formatVersion !== 1 || !isSpecRevision(value.specRevision)) {
+  if (!isRecord13(value) || value.formatVersion !== 1 || !isSpecRevision(value.specRevision)) {
     throw new ScenarioError("Reproducer must have formatVersion 1 and a supported specRevision.");
   }
   assertOnlyKeys(value, ["formatVersion", "specRevision", "seed", "target", "scenario"], "Reproducer");
   if (value.seed !== void 0 && (typeof value.seed !== "number" || !Number.isInteger(value.seed) || value.seed < 0 || value.seed > 4294967295)) {
     throw new ScenarioError("Reproducer seed must be an unsigned 32-bit integer when present.");
   }
-  if (!isRecord12(value.target)) {
+  if (!isRecord13(value.target)) {
     throw new ScenarioError("Reproducer target must be an object.");
   }
   const target = value.target;
@@ -25133,7 +25466,7 @@ function validateReproducer(value) {
   }
 }
 function validateStep(value, index) {
-  if (!isRecord12(value) || typeof value.type !== "string") {
+  if (!isRecord13(value) || typeof value.type !== "string") {
     throw new ScenarioError(`Scenario step ${index} must be an object with a type.`);
   }
   switch (value.type) {
@@ -25180,7 +25513,7 @@ function validateWire(value, index) {
   if (value === void 0) {
     return;
   }
-  if (!isRecord12(value) || value.transport !== "stdio" && value.transport !== "streamable-http") {
+  if (!isRecord13(value) || value.transport !== "stdio" && value.transport !== "streamable-http") {
     throw new ScenarioError(`Scenario step ${index} has an invalid wire descriptor.`);
   }
   if (value.transport === "stdio") {
@@ -25197,7 +25530,7 @@ function validateWire(value, index) {
   if (typeof value.fault !== "string" || value.fault.length === 0) {
     throw new ScenarioError(`Scenario step ${index} HTTP wire descriptors require a fault name.`);
   }
-  if (value.options !== void 0 && (!isRecord12(value.options) || !isJsonValue3(value.options))) {
+  if (value.options !== void 0 && (!isRecord13(value.options) || !isJsonValue3(value.options))) {
     throw new ScenarioError(`Scenario step ${index} HTTP wire options must be a JSON object.`);
   }
 }
@@ -25215,7 +25548,7 @@ function isHttpUrl(value) {
 function isPositiveNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
-function isRecord12(value) {
+function isRecord13(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isJsonValue3(value) {
@@ -25228,7 +25561,7 @@ function isJsonValue3(value) {
   if (Array.isArray(value)) {
     return value.every(isJsonValue3);
   }
-  if (isRecord12(value)) {
+  if (isRecord13(value)) {
     return Object.values(value).every(isJsonValue3);
   }
   return false;
@@ -25243,7 +25576,7 @@ function assertOnlyKeys(value, allowed, label) {
 // src/core/reproducer.ts
 async function saveReproducer(path, reproducer) {
   validateReproducer(reproducer);
-  await (0, import_promises4.writeFile)(path, `${JSON.stringify(reproducer, null, 2)}
+  await (0, import_promises6.writeFile)(path, `${JSON.stringify(reproducer, null, 2)}
 `, "utf8");
 }
 function createReproducer(scenario, target, seed) {
@@ -25272,10 +25605,10 @@ function createReproducer(scenario, target, seed) {
 // src/reporters/run.ts
 async function writeRunReports(options) {
   const { directory, run } = options;
-  const reproducerDirectory = (0, import_node_path5.join)(directory, "reproducers");
-  await (0, import_promises5.mkdir)(reproducerDirectory, { recursive: true });
-  const findingsPath = (0, import_node_path5.join)(directory, "findings.json");
-  const metadataPath = (0, import_node_path5.join)(directory, "run-metadata.json");
+  const reproducerDirectory = (0, import_node_path7.join)(directory, "reproducers");
+  await (0, import_promises7.mkdir)(reproducerDirectory, { recursive: true });
+  const findingsPath = (0, import_node_path7.join)(directory, "findings.json");
+  const metadataPath = (0, import_node_path7.join)(directory, "run-metadata.json");
   const findingsDocument = {
     formatVersion: 1,
     seed: run.seed,
@@ -25289,14 +25622,16 @@ async function writeRunReports(options) {
     durationMs: run.durationMs,
     corpusEntriesAdded: run.corpusEntriesAdded,
     diagnostics: run.diagnostics,
+    ...run.firstFindingCases === void 0 ? {} : { firstFindingCases: run.firstFindingCases },
+    ...run.coverageFeedback === void 0 ? {} : { coverageFeedback: run.coverageFeedback },
     ...run.baseline === void 0 ? {} : { baseline: run.baseline }
   };
-  await (0, import_promises5.writeFile)(metadataPath, `${JSON.stringify(metadata, null, 2)}
+  await (0, import_promises7.writeFile)(metadataPath, `${JSON.stringify(metadata, null, 2)}
 `, "utf8");
   const paths = [];
   const selections = options.reporters ?? [{ name: "json", enabled: true, options: {} }];
   if (selections.some((selection) => selection.enabled && selection.name === "json")) {
-    await (0, import_promises5.writeFile)(findingsPath, `${JSON.stringify(findingsDocument, null, 2)}
+    await (0, import_promises7.writeFile)(findingsPath, `${JSON.stringify(findingsDocument, null, 2)}
 `, "utf8");
     paths.push(findingsPath);
   }
@@ -25307,8 +25642,8 @@ async function writeRunReports(options) {
     }
     const reporter = reporterRegistry.get(selection.name);
     const extension = reporter.fileExtension ?? "txt";
-    const path = (0, import_node_path5.join)(directory, `${selection.name}.${extension}`);
-    await (0, import_promises5.writeFile)(path, reporter.render(run.findings, selection.options), "utf8");
+    const path = (0, import_node_path7.join)(directory, `${selection.name}.${extension}`);
+    await (0, import_promises7.writeFile)(path, reporter.render(run.findings, selection.options), "utf8");
     paths.push(path);
   }
   const target = {
@@ -25317,7 +25652,7 @@ async function writeRunReports(options) {
   };
   for (const item of run.reproducers) {
     const reproducer = createReproducer(item.scenario, target, run.seed);
-    const path = (0, import_node_path5.join)(reproducerDirectory, `${item.findingId}.repro.json`);
+    const path = (0, import_node_path7.join)(reproducerDirectory, `${item.findingId}.repro.json`);
     await saveReproducer(path, reproducer);
     paths.push(path);
   }
@@ -25400,9 +25735,15 @@ async function main() {
       generatorSequence: config.generators.filter((selection) => selection.enabled).flatMap((selection) => Array.from({ length: selection.weight }, () => selection.name))
     },
     ...config.argumentStrategies.length === 0 ? {} : { argumentStrategies: config.argumentStrategies },
-    ...config.oracles.length === 0 ? {} : { oracleSelections: config.oracles }
+    ...config.oracles.length === 0 ? {} : { oracleSelections: config.oracles },
+    ...config.coverageFeedback.enabled ? {
+      coverageFeedback: {
+        provider: config.coverageFeedback.provider,
+        batchSize: config.coverageFeedback.batchSize
+      }
+    } : {}
   });
-  const reportDirectoryPath = (0, import_node_path6.resolve)(config.reportDirectory);
+  const reportDirectoryPath = (0, import_node_path8.resolve)(config.reportDirectory);
   const environmentNames = [
     .../* @__PURE__ */ new Set([
       ...Object.keys(target.env ?? {}),
@@ -25420,7 +25761,7 @@ async function main() {
   if (summaryPath === void 0 || summaryPath.length === 0) {
     throw new WringerError("ACTION_ERROR", "GITHUB_STEP_SUMMARY is not set.");
   }
-  await (0, import_promises6.appendFile)(summaryPath, await (0, import_promises6.readFile)((0, import_node_path6.join)(reportDirectoryPath, "markdown.md"), "utf8"), "utf8");
+  await (0, import_promises8.appendFile)(summaryPath, await (0, import_promises8.readFile)((0, import_node_path8.join)(reportDirectoryPath, "markdown.md"), "utf8"), "utf8");
   const counts = { high: 0, medium: 0, low: 0, info: 0 };
   for (const finding of result.findings) {
     counts[finding.severity] += 1;
@@ -25431,7 +25772,7 @@ async function main() {
     medium_count: String(counts.medium),
     low_count: String(counts.low),
     info_count: String(counts.info),
-    sarif_path: (0, import_node_path6.join)(reportDirectoryPath, "sarif.sarif"),
+    sarif_path: (0, import_node_path8.join)(reportDirectoryPath, "sarif.sarif"),
     report_directory: reportDirectoryPath,
     seed: String(result.seed)
   })) {
@@ -25542,7 +25883,7 @@ function parseEnvironment(value) {
       { cause: error }
     );
   }
-  if (!isRecord13(parsed) || !Object.values(parsed).every((item) => typeof item === "string")) {
+  if (!isRecord14(parsed) || !Object.values(parsed).every((item) => typeof item === "string")) {
     throw new WringerError("USAGE_ERROR", "The env input must be a JSON object of string values.");
   }
   return parsed;
@@ -25556,12 +25897,12 @@ async function setOutput(name, value) {
   while (value.includes(delimiter)) {
     delimiter = `MCP_WRINGER_${(0, import_node_crypto4.randomUUID)().replaceAll("-", "")}`;
   }
-  await (0, import_promises6.appendFile)(outputPath, `${name}<<${delimiter}
+  await (0, import_promises8.appendFile)(outputPath, `${name}<<${delimiter}
 ${value}
 ${delimiter}
 `, "utf8");
 }
-function isRecord13(value) {
+function isRecord14(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 main().catch((error) => {

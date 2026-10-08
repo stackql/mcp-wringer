@@ -89,6 +89,14 @@ async function main(): Promise<void> {
       }),
     ...(config.argumentStrategies.length === 0 ? {} : { argumentStrategies: config.argumentStrategies }),
     ...(config.oracles.length === 0 ? {} : { oracleSelections: config.oracles }),
+    ...(config.coverageFeedback.enabled
+      ? {
+        coverageFeedback: {
+          provider: config.coverageFeedback.provider,
+          batchSize: config.coverageFeedback.batchSize,
+        },
+      }
+      : {}),
   });
 
   const reportDirectoryPath = resolve(config.reportDirectory);

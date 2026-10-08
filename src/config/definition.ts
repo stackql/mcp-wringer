@@ -141,6 +141,33 @@ const commonProperties = {
     default: [],
     description: "Argument strategy registry selections. Empty enables all registered strategies.",
   },
+  coverageFeedback: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: {
+        type: "boolean",
+        default: false,
+        description: "Enable experimental coverage-guided generator scheduling.",
+      },
+      provider: {
+        type: "string",
+        minLength: 1,
+        default: "node-v8",
+        description: "Coverage provider used to collect target coverage at batch boundaries.",
+      },
+      batchSize: {
+        type: "integer",
+        minimum: 1,
+        maximum: 100,
+        default: 8,
+        description: "Scenarios per generator batch before coverage feedback is applied.",
+      },
+    },
+    required: ["enabled", "provider", "batchSize"],
+    default: { enabled: false, provider: "node-v8", batchSize: 8 },
+    description: "Experimental coverage feedback. Requires a spawned stdio target, one worker, and restartPolicy 'per-case'.",
+  },
   failOn: {
     ...severitySchema,
     default: "high",
@@ -237,6 +264,7 @@ export const configDefinition = {
     "allowNonLoopback",
     "allowTools",
     "argumentStrategies",
+    "coverageFeedback",
     "failOn",
     "reportDirectory",
     "corpusDirectory",

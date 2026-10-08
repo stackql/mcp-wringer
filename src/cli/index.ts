@@ -14,6 +14,7 @@ import { runFuzz, runSingleScenario, type FuzzProfile, type RestartPolicy } from
 import { loadConfiguration, createInitialConfig } from "../config/load.js";
 import { oracleRegistry } from "../oracles/index.js";
 import { reporterRegistry } from "../reporters/index.js";
+import { coverageProviderRegistry } from "../coverage-feedback/index.js";
 import { profileRegistry } from "../config/profiles.js";
 import type { ConfigOverrides, ResolvedConfig } from "../config/definition.js";
 import type { FindingSeverity, SpecRevision, TargetDescriptor } from "../core/types.js";
@@ -397,6 +398,14 @@ async function run(args: string[]): Promise<void> {
       }),
     ...(config.argumentStrategies.length === 0 ? {} : { argumentStrategies: config.argumentStrategies }),
     ...(config.oracles.length === 0 ? {} : { oracleSelections: config.oracles }),
+    ...(config.coverageFeedback.enabled
+      ? {
+        coverageFeedback: {
+          provider: config.coverageFeedback.provider,
+          batchSize: config.coverageFeedback.batchSize,
+        },
+      }
+      : {}),
   });
   const reportDirectory = resolve(config.reportDirectory);
   const environmentNames = [
@@ -416,6 +425,12 @@ async function run(args: string[]): Promise<void> {
     `Completed ${result.casesRun} cases in ${Math.round(result.durationMs)} ms; `
       + `${result.findings.length} confirmed finding(s). Reports: ${reportDirectory}\n`,
   );
+  if (result.coverageFeedback !== undefined) {
+    process.stderr.write(
+      `Coverage feedback: ${result.coverageFeedback.features} feature(s) across `
+        + `${result.coverageFeedback.batches} batch(es).\n`,
+    );
+  }
   if (config.reporters.some((selection) => selection.enabled && selection.name === "console")) {
     process.stderr.write(reporterRegistry.get("console").render(result.findings));
   }
@@ -449,7 +464,7 @@ async function initializeConfig(args: string[]): Promise<void> {
 async function listExtensions(args: string[]): Promise<void> {
   const category = args[0]?.startsWith("--") === true ? undefined : args[0];
   const parsed = parseOptions(category === undefined ? args : args.slice(1), ["--config"], []);
-  const categories = ["transports", "specs", "generators", "oracles", "reporters", "profiles"];
+  const categories = ["transports", "specs", "generators", "oracles", "reporters", "coverage-providers", "profiles"];
   if (category !== undefined && !categories.includes(category)) {
     throw new WringerError("USAGE_ERROR", `Usage: mcp-wringer list [${categories.join("|")}] [--config <path>]`);
   }
@@ -461,6 +476,7 @@ async function listExtensions(args: string[]): Promise<void> {
     specs: specProfiles.names(),
     generators: generatorRegistry.names(),
     argumentStrategies: argumentStrategyRegistry.names(),
+    "coverage-providers": coverageProviderRegistry.names(),
     oracles: oracleRegistry.names(),
     reporters: reporterRegistry.names(),
     profiles: [...new Set([...profileRegistry.names(), ...userProfiles])].sort(),
@@ -635,7 +651,7 @@ function printHelp(): void {
       "",
       "Usage:",
       "  mcp-wringer init [--out <file>]",
-      "  mcp-wringer list [transports|specs|generators|oracles|reporters|profiles] [--config <file>]",
+      "  mcp-wringer list [transports|specs|generators|oracles|reporters|coverage-providers|profiles] [--config <file>]",
       "  mcp-wringer replay <file.repro.json> [--out <trace.json>] [--transport stdio|streamable-http] [--url URL]",
       "      [--env NAME=VALUE] [--inherit-env] [--allow-non-loopback] [--allow-tool NAME] [-- <command> [args...]]",
       "  mcp-wringer inspect [--config FILE] [--show-config] [--spec <revision>] [--transport stdio|streamable-http] [--url URL]",

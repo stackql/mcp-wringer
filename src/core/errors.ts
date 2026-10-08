@@ -31,3 +31,9 @@ export class TransportError extends WringerError {
     super("TRANSPORT_ERROR", message, options);
   }
 }
+
+export class CoverageError extends WringerError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("COVERAGE_ERROR", message, options);
+  }
+}

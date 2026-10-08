@@ -6,6 +6,7 @@ import { argumentStrategyRegistry } from "../generators/argument-strategies.js";
 import { generatorRegistry } from "../generators/index.js";
 import { oracleRegistry } from "../oracles/index.js";
 import { reporterRegistry } from "../reporters/index.js";
+import { coverageProviderRegistry } from "../coverage-feedback/index.js";
 import { specProfiles } from "../spec/profiles.js";
 import { loadConfiguredPlugins } from "../plugin/loader.js";
 import { configDefinition } from "./definition.js";
@@ -169,7 +170,7 @@ function parseEnvironmentValue(value: string, key: string): unknown {
     }
     return value === "true";
   }
-  if (["args", "env", "allowTools", "argumentStrategies", "plugins", "generators", "oracles", "reporters", "profiles"].includes(key)) {
+  if (["args", "env", "allowTools", "argumentStrategies", "coverageFeedback", "plugins", "generators", "oracles", "reporters", "profiles"].includes(key)) {
     try {
       return JSON.parse(value) as unknown;
     } catch (error) {
@@ -238,6 +239,7 @@ function validateExtensionNames(config: ResolvedConfig): void {
   for (const selection of config.argumentStrategies) {
     assertRegistered("argument strategy", selection.name, argumentStrategyRegistry.names());
   }
+  assertRegistered("coverage provider", config.coverageFeedback.provider, coverageProviderRegistry.names());
   if (config.argumentStrategies.length > 0 && !config.argumentStrategies.some((selection) => selection.enabled)) {
     throw new WringerError("CONFIG_ERROR", "At least one argument strategy must be enabled.");
   }

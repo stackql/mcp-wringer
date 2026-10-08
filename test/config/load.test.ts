@@ -88,4 +88,19 @@ describe("configuration loading", () => {
       options: {},
     }]);
   });
+
+  it("keeps coverage feedback disabled by default and validates selected providers", async () => {
+    const defaults = await loadConfiguration({ environment: {} });
+    expect(defaults.config.coverageFeedback).toEqual({
+      enabled: false,
+      provider: "node-v8",
+      batchSize: 8,
+    });
+
+    const configPath = await createConfig({
+      coverageFeedback: { enabled: true, provider: "node-v88", batchSize: 4 },
+    });
+    await expect(loadConfiguration({ configPath, environment: {} }))
+      .rejects.toThrow("Unknown coverage provider 'node-v88'. Did you mean 'node-v8'?");
+  });
 });

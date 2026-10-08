@@ -8,6 +8,8 @@ import type { Oracle } from "../oracles/types.js";
 import { oracleRegistry } from "../oracles/registry.js";
 import type { Reporter } from "../reporters/types.js";
 import { reporterRegistry } from "../reporters/registry.js";
+import type { CoverageProvider } from "../coverage-feedback/types.js";
+import { coverageProviderRegistry } from "../coverage-feedback/registry.js";
 
 export const WRINGER_PLUGIN_API_VERSION = "0.1" as const;
 
@@ -17,6 +19,7 @@ export interface PluginApi {
   registerArgumentStrategy(name: string, strategy: ArgumentStrategy): void;
   registerOracle(name: string, oracle: Oracle): void;
   registerReporter(name: string, reporter: Reporter): void;
+  registerCoverageProvider(name: string, provider: CoverageProvider): void;
   registerProfile(name: string, profile: ProfileConfig): void;
 }
 
@@ -40,6 +43,9 @@ export const pluginApi: PluginApi = {
   registerReporter(name, reporter) {
     reporterRegistry.register(name, reporter);
   },
+  registerCoverageProvider(name, provider) {
+    coverageProviderRegistry.register(name, provider);
+  },
   registerProfile(name, profile) {
     profileRegistry.register(name, profile);
   },
@@ -54,5 +60,6 @@ export type {
 } from "../generators/types.js";
 export type { FindingDraft, Oracle, OracleContext } from "../oracles/types.js";
 export type { Reporter } from "../reporters/types.js";
+export type { CoverageProvider, CoverageSelection, CoverageFeedbackResult } from "../coverage-feedback/types.js";
 export type { ProfileConfig } from "../config/definition.js";
 export type { Finding, JsonValue, Scenario, ScenarioStep, SpecRevision, TraceEvent } from "../core/types.js";
