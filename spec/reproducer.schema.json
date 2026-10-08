@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackql.com/mcp-wringer/reproducer.schema.json",
+  "title": "MCP Wringer Reproducer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "specRevision", "target", "scenario"],
+  "properties": {
+    "formatVersion": { "const": 1 },
+    "specRevision": { "enum": ["2025-11-25", "2026-07-28"] },
+    "target": { "$ref": "#/$defs/target" },
+    "scenario": { "$ref": "#/$defs/scenario" }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "args", "environmentNames"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "environmentNames": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formatVersion", "id", "specRevision", "steps"],
+      "properties": {
+        "formatVersion": { "const": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "specRevision": { "enum": ["2025-11-25", "2026-07-28"] },
+        "description": { "type": "string" },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+      }
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "message"],
+          "properties": {
+            "type": { "const": "send" },
+            "message": {},
+            "wire": { "$ref": "#/$defs/wire" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "bytesBase64"],
+          "properties": {
+            "type": { "const": "send-raw" },
+            "bytesBase64": { "type": "string", "contentEncoding": "base64" },
+            "wire": { "$ref": "#/$defs/wire" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "await-response" },
+            "id": { "type": ["string", "number"] },
+            "timeoutMs": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "operation"],
+          "properties": {
+            "type": { "const": "transport" },
+            "operation": { "const": "close-stdin" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "durationMs"],
+          "properties": {
+            "type": { "const": "delay" },
+            "durationMs": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      ]
+    },
+    "wire": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transport"],
+          "properties": {
+            "transport": { "const": "stdio" },
+            "chunks": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+            "delayMs": { "type": "number", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transport", "fault"],
+          "properties": {
+            "transport": { "const": "streamable-http" },
+            "fault": { "type": "string", "minLength": 1 },
+            "options": { "type": "object" }
+          }
+        }
+      ]
+    }
+  }
+}

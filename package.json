@@ -1,0 +1,69 @@
+{
+  "name": "@stackql/mcp-wringer",
+  "version": "0.1.0",
+  "description": "Protocol robustness fuzzer for Model Context Protocol servers.",
+  "type": "module",
+  "bin": {
+    "mcp-wringer": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin/index.d.ts",
+      "import": "./dist/plugin/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist/",
+    "dist-action/",
+    "spec/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "build:action": "tsup --config tsup.action.config.ts",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "docs:config": "node ./scripts/docs-config.mjs",
+    "lint": "eslint .",
+    "spec:sync": "node ./scripts/spec-sync.mjs",
+    "test": "vitest run",
+    "test:matrix": "vitest run --config vitest.matrix.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "fuzzing",
+    "json-rpc",
+    "robustness",
+    "security"
+  ],
+  "author": "StackQL Studios",
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^24.19.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
+  "overrides": {
+    "esbuild": "0.28.2"
+  }
+}

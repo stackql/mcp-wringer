@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "specRevision": "2026-07-28",
+  "target": {
+    "command": "node",
+    "args": ["fixtures/stdio-server.mjs", "--revision", "2026-07-28"],
+    "environmentNames": []
+  },
+  "scenario": {
+    "formatVersion": 1,
+    "id": "tools-list-basic-2026",
+    "specRevision": "2026-07-28",
+    "description": "List fixture tools using per-request protocol metadata.",
+    "steps": [
+      {
+        "type": "send",
+        "message": {
+          "jsonrpc": "2.0",
+          "id": "tools-list",
+          "method": "tools/list",
+          "params": {
+            "_meta": {
+              "io.modelcontextprotocol/clientCapabilities": {},
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+            }
+          }
+        }
+      },
+      { "type": "await-response", "id": "tools-list" }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "repository": "modelcontextprotocol/modelcontextprotocol",
+  "commit": "0a11bf68c7ec4473526ec15589f592afcd12d1e8",
+  "pinnedAt": "2026-10-08",
+  "revisions": [
+    "2025-11-25",
+    "2026-07-28"
+  ],
+  "hashes": {
+    "2025-11-25/schema.json": "268a5f82ba70fd7e4b6dc4aa1e64f116f74b4d0edcb69dc046829c79dd4e97e7",
+    "2026-07-28/schema.json": "ef70b61f99b6d2e5e3b46863822eab08dff6a45bedc7a08914e0e5b133f40203"
+  }
+}

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions: {}
+
+jobs:
+  test:
+    name: check (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@949feb2413d6458794dcd2491c4babbbce0c15c1
+
+      - name: Setup Node
+        uses: actions/setup-node@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Verify vendored specs
+        run: npm run spec:sync && git diff --exit-code spec

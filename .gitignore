@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated Action bundle (commit deliberately as part of M6)
+/dist-action/
