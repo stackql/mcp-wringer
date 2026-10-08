@@ -23,10 +23,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout application
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: stackql/mcp-wringer
           ref: <full-commit-sha>
@@ -64,10 +64,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout application
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: stackql/mcp-wringer
           ref: <full-commit-sha>
@@ -104,10 +104,10 @@ jobs:
       security-events: write
     steps:
       - name: Checkout application
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: stackql/mcp-wringer
           ref: <full-commit-sha>
@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7999b86c43a865dc79d8923397f35af22de63401
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
         with:
           sarif_file: ${{ steps.wringer.outputs.sarif_path }}
 ```
