@@ -5,11 +5,11 @@ export default defineConfig({
   format: ["cjs"],
   target: "node22",
   sourcemap: true,
-  clean: false,
+  clean: true,
   outDir: "dist-action",
   outExtension() {
     return {
-      js: ".js",
+      js: ".cjs",
     };
   },
 });

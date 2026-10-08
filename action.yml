@@ -1,0 +1,60 @@
+name: MCP Wringer
+description: Fuzz an authorised MCP server and publish deterministic reports.
+author: StackQL Studios
+
+inputs:
+  command:
+    description: Executable to start a stdio target. Use a JSON string array in args; no shell is used.
+    required: false
+  args:
+    description: JSON array of arguments passed to command.
+    required: false
+    default: ""
+  url:
+    description: Streamable HTTP endpoint. Omit for stdio targets.
+    required: false
+  config_path:
+    description: Optional JSON configuration file path.
+    required: false
+  profile:
+    description: Run profile, such as quick, standard, or deep.
+    required: false
+  seed:
+    description: Root seed for deterministic scenario generation.
+    required: false
+  fail_on:
+    description: Finding severity threshold that fails the Action.
+    required: false
+  report_directory:
+    description: Directory for run reports and reproducer files.
+    required: false
+  env:
+    description: JSON object of string environment values passed to the target.
+    required: false
+    default: "{}"
+  allow_non_loopback:
+    description: Explicitly authorize attaching to a non-loopback HTTP address.
+    required: false
+    default: "false"
+
+outputs:
+  finding_count:
+    description: Total count of confirmed findings.
+  high_count:
+    description: Confirmed high-severity finding count.
+  medium_count:
+    description: Confirmed medium-severity finding count.
+  low_count:
+    description: Confirmed low-severity finding count.
+  info_count:
+    description: Confirmed informational finding count.
+  sarif_path:
+    description: Path to the SARIF 2.1.0 report.
+  report_directory:
+    description: Absolute path to the report directory.
+  seed:
+    description: Root seed used for the run.
+
+runs:
+  using: node24
+  main: dist-action/index.cjs
