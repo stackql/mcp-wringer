@@ -35,4 +35,20 @@ npx mcp-wringer replay .mcp-wringer/reports/reproducers/<finding-id>.repro.json 
 npx mcp-wringer minimize .mcp-wringer/reports/reproducers/<finding-id>.repro.json --env NAME=VALUE
 ```
 
+## Run a Streamable HTTP test
+
+Attach to a local endpoint with `--url`:
+
+```sh
+npx mcp-wringer run --url http://127.0.0.1:3000/mcp --spec 2025-11-25 --profile quick
+```
+
+To start a fixture or server process that listens on a known URL, provide both `--url` and the command:
+
+```sh
+npx mcp-wringer run --transport streamable-http --url http://127.0.0.1:3000/mcp --spec 2025-11-25 -- node server.js
+```
+
+Attach mode refuses non-loopback hosts unless `--allow-non-loopback` is supplied. Use that flag only for a target you own or are explicitly authorised to test. Reproducers can be replayed over the other transport with `--transport` and, for HTTP, `--url`.
+
 Run the tool only against fixtures, the reference server, or a server you own or are authorised to test. Isolate the target and do not provide it with real credentials.

@@ -1,36 +1,36 @@
 import { performance } from "node:perf_hooks";
 import type { ChildProcess } from "node:child_process";
 import { ScenarioError, TargetError, TransportError } from "../../core/errors.js";
-import type { JsonValue, Scenario, ScenarioStep, Trace, TraceEvent, TraceEvent as TraceRecord } from "../../core/types.js";
+import type {
+  JsonValue,
+  Scenario,
+  ScenarioStep,
+  Trace,
+  TraceEvent,
+  TraceEvent as TraceRecord,
+  TransportRunFailure,
+  TransportRunOutcome,
+} from "../../core/types.js";
 import { spawnTarget, terminateTarget, type SpawnTargetOptions } from "../../target/spawn.js";
+import type { TransportRunResult, TransportSession } from "../types.js";
 
 export interface StdioRunOptions extends SpawnTargetOptions {
   scenario: Scenario;
   timeoutMs?: number;
 }
 
-export interface StdioRunResult {
+export interface StdioRunResult extends TransportRunResult {
   trace: Trace;
   responses: JsonValue[];
   outcome: StdioRunOutcome;
+  transport: "stdio";
 }
 
-export interface StdioRunFailure {
-  kind: "timeout" | "target-exit" | "transport-error";
-  phase: "response" | "shutdown" | "transport";
-  message: string;
-}
+export type StdioRunFailure = TransportRunFailure;
 
-export interface StdioRunOutcome {
-  failure?: StdioRunFailure;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  durationMs: number;
-  stdoutBytes: number;
-  stderrBytes: number;
-}
+export type StdioRunOutcome = TransportRunOutcome;
 
-export class StdioScenarioSession {
+export class StdioScenarioSession implements TransportSession {
   readonly #child: ChildProcess;
   readonly #frames = new AsyncQueue<Buffer>();
   readonly #recorder: TraceRecorder;
@@ -131,6 +131,15 @@ export class StdioScenarioSession {
           break;
         }
       }
+      if (failure?.kind === "transport-error" && /EPIPE/u.test(failure.message) && this.#exitStatus === undefined) {
+        await Promise.race([
+          this.#exitPromise,
+          new Promise<void>((resolve) => setTimeout(resolve, 100)),
+        ]);
+        if (this.#exitStatus !== undefined) {
+          failure = { ...failure, kind: "target-exit" };
+        }
+      }
       if (options.closeAfterScenario ?? true) {
         await this.close(failure !== undefined);
       }
@@ -151,6 +160,7 @@ export class StdioScenarioSession {
         stdoutBytes: byteCounts.stdoutBytes - byteStart.stdoutBytes,
         stderrBytes: byteCounts.stderrBytes - byteStart.stderrBytes,
       },
+      transport: "stdio",
     };
   }
 
@@ -210,6 +220,9 @@ async function executeStep(
     case "await-response":
       return readResponse(frames, step.id, step.timeoutMs ?? 5_000);
     case "transport":
+      if (step.operation !== "close-stdin") {
+        throw new ScenarioError(`Transport operation '${step.operation}' cannot run over stdio.`);
+      }
       child.stdin?.end();
       return undefined;
     case "delay":
@@ -442,11 +455,13 @@ class TraceRecorder {
       formatVersion: 1,
       scenarioId,
       specRevision: this.#revision,
+      transport: "stdio",
       events: this.#events.slice(fromIndex).map((event) => ({
         offsetMs: event.offsetMs,
         channel: event.channel,
         encoding: event.encoding,
         data: event.data,
+        ...(event.http === undefined ? {} : { http: event.http }),
       })),
     };
   }

@@ -35,6 +35,7 @@ export function generateScenarios(
   seed: number,
   count: number,
   names: readonly string[] = generatorNames,
+  transport: GeneratorContext["transport"] = "stdio",
 ): Scenario[] {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
@@ -52,6 +53,7 @@ export function generateScenarios(
       revision,
       surface,
       caseIndex,
+      transport,
     };
     scenarios.push(generatorRegistry.get(name).generate(context));
   }
@@ -116,7 +118,9 @@ function generateByName(name: (typeof generatorNames)[number], context: Generato
       steps = promptSteps(context, id);
       break;
     case "wire-fault":
-      steps = wireFaultSteps(context, id);
+      steps = context.transport === "streamable-http"
+        ? httpWireFaultSteps(context, id)
+        : wireFaultSteps(context, id);
       break;
   }
   const bootstrap = context.revision === "2026-07-28"
@@ -159,6 +163,32 @@ function promptSteps(context: GeneratorContext, id: string): ScenarioStep[] {
     return requestSteps(profile, profile.promptListMethod, `${id}-prompts`);
   }
   return requestSteps(profile, "prompts/get", `${id}-get`, { name: prompt.name, arguments: {} });
+}
+
+function httpWireFaultSteps(context: GeneratorContext, id: string): ScenarioStep[] {
+  const profile = specProfiles.get(context.revision);
+  const request = profile.request("tools/list", `${id}-wire`);
+  const faults = [
+    "missing-accept",
+    "missing-content-type",
+    "invalid-content-type",
+    "missing-protocol-version",
+    "mismatched-protocol-version",
+    context.revision === "2025-11-25" ? "invalid-session-id" : "wrong-method",
+    "truncated-body",
+    "oversized-body",
+    "abort-response",
+    "concurrent-requests",
+  ];
+  const fault = faults[context.caseIndex % faults.length] ?? faults[0] ?? "missing-accept";
+  return [
+    {
+      type: "send",
+      message: request,
+      wire: { transport: "streamable-http", fault },
+    },
+    { type: "await-response", id: `${id}-wire`, timeoutMs: 1_000 },
+  ];
 }
 
 function wireFaultSteps(context: GeneratorContext, id: string): ScenarioStep[] {

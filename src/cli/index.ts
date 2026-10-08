@@ -7,13 +7,15 @@ import { ScenarioError, TargetError, TransportError, WringerError } from "../cor
 import { assertScenarioSafety } from "../core/safety.js";
 import { createRootSeed } from "../core/seed.js";
 import { loadReproducer, saveReproducer, createReproducer } from "../core/reproducer.js";
+import type { ReproducerTargetInput } from "../core/reproducer.js";
 import { runFuzz, runSingleScenario, type FuzzProfile, type RestartPolicy } from "../core/run.js";
-import type { FindingSeverity, SpecRevision } from "../core/types.js";
+import type { FindingSeverity, SpecRevision, TargetDescriptor } from "../core/types.js";
 import type { InspectedSurface } from "../target/surface.js";
 import { consoleReporter } from "../reporters/console.js";
 import { writeRunReports } from "../reporters/run.js";
 import { inspectServer } from "./inspect.js";
 import { transportRegistry } from "../transports/registry.js";
+import type { TransportTargetOptions } from "../transports/types.js";
 
 const VERSION = "0.1.0";
 const DEFAULT_REVISION: SpecRevision = "2025-11-25";
@@ -57,24 +59,24 @@ async function replay(args: string[]): Promise<void> {
   if (reproPath === undefined || reproPath.startsWith("--")) {
     throw new WringerError("USAGE_ERROR", "Usage: mcp-wringer replay <file.repro.json> [--env NAME=VALUE] [--inherit-env] [--allow-tool NAME] [-- <command> [args...]]");
   }
-  const parsed = parseOptions(optionArgs.slice(1), ["--out", "--env", "--allow-tool"], ["--inherit-env"]);
+  const parsed = parseOptions(
+    optionArgs.slice(1),
+    ["--out", "--env", "--allow-tool", "--transport", "--url"],
+    ["--inherit-env", "--allow-non-loopback"],
+  );
   const reproducer = await loadReproducer(reproPath);
-  const command = overrideCommand ?? reproducer.target.command;
-  const targetArgs = overrideCommand === undefined ? reproducer.target.args : overrideArgs;
   const env = parseEnvironment(parsed.values.get("--env") ?? []);
-  const targetOptions = {
+  const target = resolveTargetOptions(parsed, reproducer.target, overrideCommand, overrideArgs, {
     ...(parsed.values.has("--env") ? { env } : {}),
     ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
-  };
-  const surface = await inspectSurfaceOrEmpty(reproducer.specRevision, command, targetArgs, targetOptions);
+  });
+  const surface = await inspectSurfaceOrEmpty(reproducer.specRevision, target);
   assertScenarioSafety(reproducer.scenario, surface, {
     allowTools: parsed.values.get("--allow-tool") ?? [],
   });
-  const { trace } = await transportRegistry.get("stdio")({
-    command,
-    args: targetArgs,
+  const { trace } = await transportRegistry.get(target.transport ?? "stdio").run({
+    ...target,
     scenario: reproducer.scenario,
-    ...targetOptions,
   });
   const output = `${JSON.stringify(trace, null, 2)}\n`;
   const outPath = parsed.values.get("--out")?.[0];
@@ -91,31 +93,31 @@ async function inspect(args: string[]): Promise<void> {
   const optionArgs = separatorIndex < 0 ? args : args.slice(0, separatorIndex);
   const command = separatorIndex < 0 ? undefined : args[separatorIndex + 1];
   const targetArgs = separatorIndex < 0 ? [] : args.slice(separatorIndex + 2);
-  if (command === undefined) {
-    throw new WringerError("USAGE_ERROR", "Usage: mcp-wringer inspect [--spec <revision>] -- <command> [args...]");
-  }
-  const parsed = parseOptions(optionArgs, ["--spec", "--env", "--timeout-ms"], ["--inherit-env"]);
+  const parsed = parseOptions(
+    optionArgs,
+    ["--spec", "--env", "--timeout-ms", "--transport", "--url"],
+    ["--inherit-env", "--allow-non-loopback"],
+  );
+  const target = resolveTargetOptions(parsed, undefined, command, targetArgs, {
+    ...(parsed.values.has("--env") ? { env: parseEnvironment(parsed.values.get("--env") ?? []) } : {}),
+    ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
+    ...(parsed.values.has("--timeout-ms")
+      ? { timeoutMs: parsePositiveInteger(parsed.values.get("--timeout-ms")?.[0], "--timeout-ms") }
+      : {}),
+  });
   const result = await inspectServer(
     parseRevision(parsed.values.get("--spec")?.[0]),
-    command,
-    targetArgs,
-    {
-      ...(parsed.values.has("--env") ? { env: parseEnvironment(parsed.values.get("--env") ?? []) } : {}),
-      ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
-      ...(parsed.values.has("--timeout-ms") ? { timeoutMs: parsePositiveInteger(parsed.values.get("--timeout-ms")?.[0], "--timeout-ms") } : {}),
-    },
+    target,
   );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 async function inspectSurfaceOrEmpty(
   revision: SpecRevision,
-  command: string,
-  args: string[],
-  options: { env?: Record<string, string>; inheritEnvironment?: boolean },
+  target: TransportTargetOptions,
 ): Promise<InspectedSurface> {
   try {
-    return await inspectServer(revision, command, args, options);
+    return await inspectServer(revision, target);
   } catch (error) {
     if (!(error instanceof ScenarioError)) {
       throw error;
@@ -125,19 +127,90 @@ async function inspectSurfaceOrEmpty(
   }
 }
 
+function resolveTargetOptions(
+  parsed: { values: Map<string, string[]>; flags: Set<string> },
+  fallback: TargetDescriptor | undefined,
+  command: string | undefined,
+  args: string[],
+  common: { env?: Record<string, string>; inheritEnvironment?: boolean; timeoutMs?: number },
+): TransportTargetOptions {
+  const fallbackTransport = fallback !== undefined && "transport" in fallback
+    ? fallback.transport
+    : "stdio";
+  const fallbackUrl = fallback !== undefined && "url" in fallback ? fallback.url : undefined;
+  const url = parsed.values.get("--url")?.[0] ?? fallbackUrl;
+  const requestedTransport = parsed.values.get("--transport")?.[0]
+    ?? (url !== undefined ? "streamable-http" : fallbackTransport);
+  const transport = oneOf(requestedTransport, ["stdio", "streamable-http"], "--transport") ?? "stdio";
+  const fallbackCommand = fallback?.command;
+  const fallbackArgs = fallback?.args;
+  const selectedCommand = command ?? (transport === fallbackTransport ? fallbackCommand : undefined);
+  const selectedArgs = command === undefined
+    ? (selectedCommand === undefined ? [] : fallbackArgs ?? [])
+    : args;
+  if (transport === "streamable-http") {
+    if (url === undefined) {
+      throw new WringerError("USAGE_ERROR", "Streamable HTTP requires --url.");
+    }
+    if (selectedCommand === undefined && selectedArgs.length > 0) {
+      throw new WringerError("USAGE_ERROR", "HTTP target args require a spawned command.");
+    }
+    return {
+      transport,
+      url,
+      ...(selectedCommand === undefined ? {} : { command: selectedCommand, args: selectedArgs }),
+      ...(parsed.flags.has("--allow-non-loopback") ? { allowNonLoopback: true } : {}),
+      ...common,
+    };
+  }
+  if (url !== undefined) {
+    throw new WringerError("USAGE_ERROR", "--url can be used only with --transport streamable-http.");
+  }
+  if (parsed.flags.has("--allow-non-loopback")) {
+    throw new WringerError("USAGE_ERROR", "--allow-non-loopback requires --transport streamable-http.");
+  }
+  if (selectedCommand === undefined) {
+    throw new WringerError("USAGE_ERROR", "A stdio target requires -- <command> [args...].");
+  }
+  return {
+    transport: "stdio",
+    command: selectedCommand,
+    args: selectedArgs,
+    ...common,
+  };
+}
+
+function toReproducerTarget(
+  target: TransportTargetOptions,
+  environmentNames: string[] = [],
+): ReproducerTargetInput {
+  if (target.transport === "streamable-http") {
+    return {
+      transport: "streamable-http",
+      url: target.url,
+      ...(target.command === undefined ? {} : { command: target.command, args: target.args ?? [] }),
+      environmentNames,
+    };
+  }
+  return {
+    transport: "stdio",
+    command: target.command,
+    args: target.args,
+    environmentNames,
+  };
+}
+
 async function run(args: string[]): Promise<void> {
   const separatorIndex = args.indexOf("--");
   const optionArgs = separatorIndex < 0 ? args : args.slice(0, separatorIndex);
   const command = separatorIndex < 0 ? undefined : args[separatorIndex + 1];
   const targetArgs = separatorIndex < 0 ? [] : args.slice(separatorIndex + 2);
-  if (command === undefined) {
-    throw new WringerError("USAGE_ERROR", "Usage: mcp-wringer run [options] -- <command> [args...]");
-  }
   const parsed = parseOptions(
     optionArgs,
     ["--spec", "--profile", "--seed", "--cases", "--duration-ms", "--workers", "--restart",
-      "--timeout-ms", "--confirmations", "--fail-on", "--report-dir", "--corpus-dir", "--env", "--allow-tool"],
-    ["--inherit-env"],
+      "--timeout-ms", "--confirmations", "--fail-on", "--report-dir", "--corpus-dir", "--env", "--allow-tool",
+      "--transport", "--url"],
+    ["--inherit-env", "--allow-non-loopback"],
   );
   const profile = oneOf(parsed.values.get("--profile")?.[0], ["quick", "standard", "deep"], "--profile") as FuzzProfile | undefined;
   const restartPolicy = oneOf(
@@ -150,9 +223,15 @@ async function run(args: string[]): Promise<void> {
   const corpusDirectory = parsed.values.get("--corpus-dir")?.[0];
   process.stderr.write(`Seed: ${seed}\n`);
   const env = parseEnvironment(parsed.values.get("--env") ?? []);
+  const target = resolveTargetOptions(parsed, undefined, command, targetArgs, {
+    ...(parsed.values.has("--env") ? { env } : {}),
+    ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
+    ...(parsed.values.has("--timeout-ms")
+      ? { timeoutMs: parsePositiveInteger(parsed.values.get("--timeout-ms")?.[0], "--timeout-ms") }
+      : {}),
+  });
   const result = await runFuzz({
-    command,
-    args: targetArgs,
+    ...target,
     revision: parseRevision(parsed.values.get("--spec")?.[0]),
     seed,
     ...(profile === undefined ? {} : { profile }),
@@ -177,8 +256,7 @@ async function run(args: string[]): Promise<void> {
   await writeRunReports({
     directory: reportDirectory,
     run: result,
-    command,
-    args: targetArgs,
+    target: toReproducerTarget(target),
     environmentNames,
   });
   process.stderr.write(
@@ -206,28 +284,24 @@ async function minimize(args: string[]): Promise<void> {
   }
   const parsed = parseOptions(
     optionArgs.slice(1),
-    ["--finding", "--out", "--env", "--confirmations", "--duration-ms", "--timeout-ms", "--allow-tool"],
-    ["--inherit-env"],
+    ["--finding", "--out", "--env", "--confirmations", "--duration-ms", "--timeout-ms", "--allow-tool", "--transport", "--url"],
+    ["--inherit-env", "--allow-non-loopback"],
   );
   const reproducer = await loadReproducer(reproPath);
-  const command = overrideCommand ?? reproducer.target.command;
-  const targetArgs = overrideCommand === undefined ? reproducer.target.args : overrideArgs;
   const env = parseEnvironment(parsed.values.get("--env") ?? []);
-  const targetOptions = {
+  const target = resolveTargetOptions(parsed, reproducer.target, overrideCommand, overrideArgs, {
     ...(parsed.values.has("--env") ? { env } : {}),
     ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
     ...(parsed.values.has("--timeout-ms") ? { timeoutMs: parsePositiveInteger(parsed.values.get("--timeout-ms")?.[0], "--timeout-ms") } : {}),
-  };
-  const surface = await inspectSurfaceOrEmpty(reproducer.specRevision, command, targetArgs, targetOptions);
+  });
+  const surface = await inspectSurfaceOrEmpty(reproducer.specRevision, target);
   const safety = { allowTools: parsed.values.get("--allow-tool") ?? [] };
   const initialRun = await runSingleScenario({
-    command,
-    args: targetArgs,
+    ...target,
     revision: reproducer.specRevision,
     scenario: reproducer.scenario,
     surface,
     safety,
-    ...targetOptions,
   });
   const requestedFinding = parsed.values.get("--finding")?.[0];
   const matchingFinding = requestedFinding === undefined
@@ -240,14 +314,12 @@ async function minimize(args: string[]): Promise<void> {
     return;
   }
   const result = await minimizeScenario({
+    ...target,
+    revision: reproducer.specRevision,
     scenario: reproducer.scenario,
     findingId: matchingFinding.id,
-    command,
-    args: targetArgs,
     surface,
     safety,
-    ...(parsed.values.has("--env") ? { env } : {}),
-    ...(parsed.flags.has("--inherit-env") ? { inheritEnvironment: true } : {}),
     ...(parsed.values.has("--confirmations") ? { confirmations: parsePositiveInteger(parsed.values.get("--confirmations")?.[0], "--confirmations") } : {}),
     ...(parsed.values.has("--duration-ms") ? { timeBudgetMs: parsePositiveInteger(parsed.values.get("--duration-ms")?.[0], "--duration-ms") } : {}),
     ...(parsed.values.has("--timeout-ms") ? { timeoutMs: parsePositiveInteger(parsed.values.get("--timeout-ms")?.[0], "--timeout-ms") } : {}),
@@ -258,7 +330,16 @@ async function minimize(args: string[]): Promise<void> {
     return;
   }
   const outPath = parsed.values.get("--out")?.[0] ?? `${reproPath.replace(/\.repro\.json$/u, "")}.minimized.repro.json`;
-  await saveReproducer(outPath, createReproducer(result.scenario, reproducer.target, reproducer.seed));
+  const environmentNames = [
+    ...new Set([
+      ...Object.keys(parsed.values.has("--env") ? env : {}),
+      ...(parsed.flags.has("--inherit-env") ? Object.keys(process.env) : []),
+    ]),
+  ].sort();
+  await saveReproducer(
+    outPath,
+    createReproducer(result.scenario, toReproducerTarget(target, environmentNames), reproducer.seed),
+  );
   process.stderr.write(`Minimized to ${result.scenario.steps.length} steps after ${result.attempts} attempts; wrote ${outPath}\n`);
 }
 
@@ -353,15 +434,18 @@ function printHelp(): void {
       "mcp-wringer 0.1.0",
       "",
       "Usage:",
-      "  mcp-wringer replay <file.repro.json> [--out <trace.json>] [--env NAME=VALUE] [--inherit-env] [--allow-tool NAME] [-- <command> [args...]]",
-      "  mcp-wringer inspect [--spec <revision>] [--env NAME=VALUE] [--inherit-env] -- <command> [args...]",
+      "  mcp-wringer replay <file.repro.json> [--out <trace.json>] [--transport stdio|streamable-http] [--url URL]",
+      "      [--env NAME=VALUE] [--inherit-env] [--allow-non-loopback] [--allow-tool NAME] [-- <command> [args...]]",
+      "  mcp-wringer inspect [--spec <revision>] [--transport stdio|streamable-http] [--url URL]",
+      "      [--allow-non-loopback] [--env NAME=VALUE] [--inherit-env] [-- <command> [args...]]",
       "  mcp-wringer run [--spec <revision>] [--profile quick|standard|deep] [--seed N] [--cases N]",
       "      [--duration-ms N] [--timeout-ms N] [--workers N] [--confirmations N]",
       "      [--restart per-case|on-failure|never] [--fail-on high|medium|low|info]",
       "      [--env NAME=VALUE] [--inherit-env] [--allow-tool NAME] [--report-dir DIR] [--corpus-dir DIR]",
-      "      -- <command> [args...]",
+      "      [--transport stdio|streamable-http] [--url URL] [--allow-non-loopback] [-- <command> [args...]]",
       "  mcp-wringer minimize <file.repro.json> [--finding ID] [--out FILE] [--duration-ms N]",
-      "      [--confirmations N] [--timeout-ms N] [--env NAME=VALUE] [--inherit-env] [--allow-tool NAME]",
+      "      [--confirmations N] [--timeout-ms N] [--transport stdio|streamable-http] [--url URL]",
+      "      [--allow-non-loopback] [--env NAME=VALUE] [--inherit-env] [--allow-tool NAME]",
       "      [-- <command> [args...]]",
       "",
       "Use only on servers you own or are authorised to test.",

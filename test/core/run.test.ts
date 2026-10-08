@@ -202,8 +202,7 @@ describe("run artifacts and minimisation", () => {
       await writeRunReports({
         directory: reportDirectory,
         run: firstRun,
-        command: process.execPath,
-        args: runOptions.args,
+        target: { transport: "stdio", command: process.execPath, args: runOptions.args },
         environmentNames: ["MCP_WRINGER_DEFECTS"],
       });
       const findingsPath = resolve(reportDirectory, "findings.json");
@@ -211,8 +210,7 @@ describe("run artifacts and minimisation", () => {
       await writeRunReports({
         directory: reportDirectory,
         run: secondRun,
-        command: process.execPath,
-        args: runOptions.args,
+        target: { transport: "stdio", command: process.execPath, args: runOptions.args },
         environmentNames: ["MCP_WRINGER_DEFECTS"],
       });
       expect(await readFile(findingsPath, "utf8")).toBe(firstFindings);
@@ -226,8 +224,9 @@ describe("run artifacts and minimisation", () => {
         throw new Error("Run reproducer is missing its root seed.");
       }
       const replay = await runSingleScenario({
-        command: reproducer.target.command,
-        args: reproducer.target.args,
+        transport: "stdio",
+        command: process.execPath,
+        args: runOptions.args,
         revision: reproducer.specRevision,
         seed: reproducer.seed,
         scenario: reproducer.scenario,
@@ -265,6 +264,7 @@ describe("run artifacts and minimisation", () => {
     const result = await minimizeScenario({
       scenario,
       findingId: crash!.id,
+      revision,
       command: process.execPath,
       args: [fixture, "--revision", revision],
       surface,

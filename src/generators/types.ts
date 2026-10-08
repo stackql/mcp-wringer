@@ -1,4 +1,4 @@
-import type { Scenario, SpecRevision } from "../core/types.js";
+import type { Scenario, SpecRevision, TransportName } from "../core/types.js";
 import type { InspectedSurface } from "../target/surface.js";
 
 export interface GeneratorContext {
@@ -6,6 +6,7 @@ export interface GeneratorContext {
   revision: SpecRevision;
   surface: InspectedSurface;
   caseIndex: number;
+  transport?: TransportName;
 }
 
 export interface ScenarioGenerator {

@@ -30,15 +30,33 @@ export function validateReproducer(value: unknown): asserts value is Reproducer 
     && (typeof value.seed !== "number" || !Number.isInteger(value.seed) || value.seed < 0 || value.seed > 0xffff_ffff)) {
     throw new ScenarioError("Reproducer seed must be an unsigned 32-bit integer when present.");
   }
-  if (!isRecord(value.target) || typeof value.target.command !== "string" || value.target.command.length === 0
-    || !Array.isArray(value.target.args)
-    || !value.target.args.every((arg) => typeof arg === "string")
-    || !Array.isArray(value.target.environmentNames)
-    || !value.target.environmentNames.every((name) => typeof name === "string")
-    || new Set(value.target.environmentNames).size !== value.target.environmentNames.length) {
-    throw new ScenarioError("Reproducer target must contain command, args, and environmentNames.");
+  if (!isRecord(value.target)) {
+    throw new ScenarioError("Reproducer target must be an object.");
   }
-  assertOnlyKeys(value.target, ["command", "args", "environmentNames"], "Reproducer target");
+  const target = value.target;
+  const isHttp = target.transport === "streamable-http";
+  const isStdio = target.transport === "stdio" || target.transport === undefined;
+  if ((!isHttp && !isStdio)
+    || (isHttp && (typeof target.url !== "string" || !isHttpUrl(target.url)
+      || (target.command !== undefined && (typeof target.command !== "string" || target.command.length === 0))
+      || (target.args !== undefined && (!Array.isArray(target.args) || !target.args.every((arg) => typeof arg === "string")))
+      || (target.command === undefined) !== (target.args === undefined)))
+    || (isStdio && (typeof target.command !== "string" || target.command.length === 0
+      || !Array.isArray(target.args) || !target.args.every((arg) => typeof arg === "string")))) {
+    throw new ScenarioError("Reproducer target must contain a valid stdio command or HTTP URL.");
+  }
+  assertOnlyKeys(
+    target,
+    isHttp
+      ? ["transport", "url", "command", "args", "environmentNames"]
+      : ["transport", "command", "args", "environmentNames"],
+    "Reproducer target",
+  );
+  if (!Array.isArray(target.environmentNames)
+    || !target.environmentNames.every((name) => typeof name === "string")
+    || new Set(target.environmentNames).size !== target.environmentNames.length) {
+    throw new ScenarioError("Reproducer target environmentNames must contain unique strings.");
+  }
   validateScenario(value.scenario);
   if (value.scenario.specRevision !== value.specRevision) {
     throw new ScenarioError("Reproducer and scenario specRevision values must match.");
@@ -129,6 +147,15 @@ function validateWire(value: unknown, index: number): void {
 
 function isSpecRevision(value: unknown): value is SpecRevision {
   return value === "2025-11-25" || value === "2026-07-28";
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
 }
 
 function isPositiveNumber(value: unknown): value is number {

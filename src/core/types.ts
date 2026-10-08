@@ -4,6 +4,34 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 
 export type SpecRevision = "2025-11-25" | "2026-07-28";
 
+export type TransportName = "stdio" | "streamable-http";
+
+export interface TransportRunFailure {
+  kind: "timeout" | "target-exit" | "transport-error";
+  phase: "response" | "shutdown" | "transport";
+  message: string;
+}
+
+export interface TransportRunOutcome {
+  failure?: TransportRunFailure;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  stdoutBytes: number;
+  stderrBytes: number;
+}
+
+export interface HttpExchangeObservation {
+  requestMethod: string;
+  requestHeaders: Record<string, string | string[]>;
+  requestBody: string;
+  responseStatus: number;
+  responseHeaders: Record<string, string | string[]>;
+  responseBody: string;
+  requestFault?: string;
+  responseAborted?: boolean;
+}
+
 export interface StdioWireDescriptor {
   transport: "stdio";
   chunks?: number[];
@@ -63,15 +91,22 @@ export interface Scenario {
 
 export interface TraceEvent {
   offsetMs: number;
-  channel: "stdin" | "stdout" | "stderr" | "process";
+  channel: "stdin" | "stdout" | "stderr" | "process" | "http-request" | "http-response";
   encoding: "utf8" | "base64";
   data: string;
+  http?: {
+    method: string;
+    headers: Record<string, string | string[]>;
+    statusCode?: number;
+    statusMessage?: string;
+  };
 }
 
 export interface Trace {
   formatVersion: 1;
   scenarioId: string;
   specRevision: SpecRevision;
+  transport?: TransportName;
   events: TraceEvent[];
 }
 
@@ -95,13 +130,28 @@ export interface EvidenceExcerpt {
   originalLengthBytes: number;
   sha256: string;
   truncated: boolean;
+  http?: TraceEvent["http"];
 }
 
-export interface TargetDescriptor {
-  command: string;
-  args: string[];
-  environmentNames: string[];
-}
+export type TargetDescriptor =
+  | {
+    transport: "stdio";
+    command: string;
+    args: string[];
+    environmentNames: string[];
+  }
+  | {
+    transport: "streamable-http";
+    url: string;
+    command?: string;
+    args?: string[];
+    environmentNames: string[];
+  }
+  | {
+    command: string;
+    args: string[];
+    environmentNames: string[];
+  };
 
 export interface Reproducer {
   formatVersion: 1;

@@ -10,12 +10,8 @@ import { generateScenarios } from "../generators/index.js";
 import { evaluateOracles, type OracleContext } from "../oracles/index.js";
 import { deduplicateFindings } from "../oracles/findings.js";
 import { specProfiles } from "../spec/profiles.js";
-import {
-  runStdioScenario,
-  StdioScenarioSession,
-  type StdioRunResult,
-  type StdioRunOptions,
-} from "../transports/stdio/runner.js";
+import { transportRegistry } from "../transports/registry.js";
+import type { TransportRunResult, TransportTargetOptions, TransportSession } from "../transports/types.js";
 import type { InspectedSurface } from "../target/surface.js";
 
 const WIRE_GENERATOR_WEIGHT = 10;
@@ -34,9 +30,7 @@ export const defaultGeneratorSequence = [
 export type FuzzProfile = "quick" | "standard" | "deep";
 export type RestartPolicy = "per-case" | "on-failure" | "never";
 
-export interface FuzzRunOptions {
-  command: string;
-  args: string[];
+interface FuzzRunCommonOptions {
   revision: SpecRevision;
   seed?: string | number;
   profile?: FuzzProfile;
@@ -52,6 +46,29 @@ export interface FuzzRunOptions {
   timeoutMs?: number;
   confirmations?: number;
 }
+
+export type FuzzRunOptions = FuzzRunCommonOptions & (
+  | {
+    transport?: "stdio";
+    command: string;
+    args: string[];
+    url?: never;
+    allowNonLoopback?: never;
+  }
+  | {
+    transport: "streamable-http";
+    url: string;
+    command?: string;
+    args?: string[];
+    allowNonLoopback?: boolean;
+  }
+);
+
+export type FuzzSingleScenarioOptions = FuzzRunOptions extends infer Options
+  ? Options extends FuzzRunOptions
+    ? Omit<Options, "profile" | "cases" | "durationMs" | "workers" | "restartPolicy">
+    : never
+  : never;
 
 export interface FuzzRunResult {
   seed: number;
@@ -94,11 +111,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
   let surface = options.surface;
   if (surface === undefined) {
     try {
-      surface = await inspectServer(options.revision, options.command, options.args, {
-        ...(options.env === undefined ? {} : { env: options.env }),
-        ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      });
+      surface = await inspectServer(options.revision, getTargetOptions(options));
     } catch (error) {
       if (!(error instanceof ScenarioError)) {
         throw error;
@@ -120,12 +133,15 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     throw new ScenarioError("Restart policies 'on-failure' and 'never' require workers=1.");
   }
 
+  const target = getTargetOptions(options);
+  const transportName = target.transport ?? "stdio";
   const scenarios = generateScenarios(
     options.revision,
     surface,
     seed,
     caseLimit,
     defaultGeneratorSequence,
+    transportName,
   );
   const deadline = startedAt + durationLimitMs;
   const caseResults: Array<{ scenario: Scenario; context: OracleContext; findings: Finding[] } | undefined> =
@@ -133,15 +149,9 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
   let nextIndex = 0;
   let corpusEntriesAdded = 0;
   const corpusDirectory = options.corpusDirectory ?? resolve(".mcp-wringer", "corpus");
-  const target = {
-    command: options.command,
-    args: options.args,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-  };
-  const recordCase = async (index: number, session?: StdioScenarioSession): Promise<{
-    session?: StdioScenarioSession;
+  const adapter = transportRegistry.get(transportName);
+  const recordCase = async (index: number, session?: TransportSession): Promise<{
+    session?: TransportSession;
     stop?: boolean;
   }> => {
     const generated = scenarios[index];
@@ -150,7 +160,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     }
     const scenario = addHealthChecks(generated, session === undefined);
     assertScenarioSafety(scenario, surface, options.safety);
-    const currentSession = session ?? new StdioScenarioSession({ ...target, scenario });
+    const currentSession = session ?? adapter.createSession({ ...target, scenario });
     const result = await currentSession.execute(scenario, { closeAfterScenario: restartPolicy === "per-case" });
     const context = createOracleContext(scenario, result, options.revision);
     const findings = evaluateOracles(context);
@@ -188,7 +198,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
   if (restartPolicy === "per-case") {
     await Promise.all(Array.from({ length: Math.min(workers, scenarios.length) }, worker));
   } else {
-    let session: StdioScenarioSession | undefined;
+    let session: TransportSession | undefined;
     try {
       for (let index = 0; index < scenarios.length && performance.now() < deadline; index += 1) {
         const outcome = await recordCase(index, session);
@@ -219,8 +229,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
         break;
       }
       const replay = await runSingleScenario({
-        command: options.command,
-        args: options.args,
+        ...target,
         revision: options.revision,
         scenario: origin.scenario,
         surface,
@@ -255,22 +264,15 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
 }
 
 export async function runSingleScenario(
-  options: Omit<FuzzRunOptions, "profile" | "cases" | "durationMs" | "workers" | "restartPolicy"> & {
+  options: FuzzSingleScenarioOptions & {
     scenario: Scenario;
     surface: InspectedSurface;
   },
-): Promise<{ scenario: Scenario; result: StdioRunResult; context: OracleContext; findings: Finding[] }> {
+): Promise<{ scenario: Scenario; result: TransportRunResult; context: OracleContext; findings: Finding[] }> {
   const scenario = addHealthChecks(options.scenario);
   assertScenarioSafety(scenario, options.surface, options.safety);
-  const target: StdioRunOptions = {
-    command: options.command,
-    args: options.args,
-    scenario,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-  };
-  const result = await runStdioScenario(target);
+  const target = getTargetOptions(options);
+  const result = await transportRegistry.get(target.transport ?? "stdio").run({ ...target, scenario });
   const context = createOracleContext(scenario, result, options.revision);
   return { scenario, result, context, findings: evaluateOracles(context) };
 }
@@ -282,8 +284,15 @@ function addHealthChecks(scenario: Scenario, includeLifecycle = true): Scenario 
     return scenario;
   }
   const profile = specProfiles.get(scenario.specRevision);
-  const prefixStepCount = profile.lifecycleSteps(`${scenario.id}-lifecycle`).length
-    + (scenario.specRevision === "2026-07-28" ? 2 : 0);
+  const lifecycleStepCount = profile.lifecycleSteps(`${scenario.id}-lifecycle`).length;
+  const hasDiscoveryBootstrap = scenario.specRevision === "2026-07-28"
+    && scenario.steps[0]?.type === "send"
+    && isRecord(scenario.steps[0].message)
+    && scenario.steps[0].message.method === "server/discover"
+    && scenario.steps[0].message.id === `${scenario.id}-discover`
+    && scenario.steps[1]?.type === "await-response"
+    && scenario.steps[1].id === scenario.steps[0].message.id;
+  const prefixStepCount = lifecycleStepCount + (hasDiscoveryBootstrap ? 2 : 0);
   const prefix = includeLifecycle ? scenario.steps.slice(0, prefixStepCount) : [];
   const existingSteps = scenario.steps.slice(prefixStepCount);
   const beforeId = `${scenario.id}-baseline-before`;
@@ -309,7 +318,7 @@ function addHealthChecks(scenario: Scenario, includeLifecycle = true): Scenario 
 
 function createOracleContext(
   scenario: Scenario,
-  result: StdioRunResult,
+  result: TransportRunResult,
   revision: SpecRevision,
 ): OracleContext {
   const profile = specProfiles.get(revision);
@@ -323,6 +332,7 @@ function createOracleContext(
     scenario,
     ...result,
     rules: profile.rules,
+    ...(result.httpExchanges === undefined ? {} : { httpExchanges: result.httpExchanges }),
     ...(liveness === undefined ? {} : {
       livenessProbe: {
         passed: !isErrorResponse(liveness),
@@ -332,6 +342,30 @@ function createOracleContext(
       ? {}
       : { baselineComparison: { before, after } }),
     expectedErrors: expectedInvalidRequestErrors(scenario, profile.rules.errorCodes.invalidRequest),
+  };
+}
+
+function getTargetOptions(options: FuzzRunOptions): TransportTargetOptions {
+  const common = {
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  };
+  if (options.transport === "streamable-http") {
+    return {
+      transport: "streamable-http",
+      url: options.url,
+      ...(options.command === undefined ? {} : { command: options.command }),
+      ...(options.args === undefined ? {} : { args: options.args }),
+      ...(options.allowNonLoopback === undefined ? {} : { allowNonLoopback: options.allowNonLoopback }),
+      ...common,
+    };
+  }
+  return {
+    transport: "stdio",
+    command: options.command,
+    args: options.args,
+    ...common,
   };
 }
 

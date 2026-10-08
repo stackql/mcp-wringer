@@ -46,7 +46,7 @@ function createOracles(): Array<[string, Oracle]> {
           return [];
         }
         const requests = sentRequests(context.scenario);
-        const responseMessages = parseStdout(context.trace).flatMap((line) => {
+        const responseMessages = parseResponseMessages(context).flatMap((line) => {
           const message = asRecord(line.value);
           return message !== undefined && ("result" in message || "error" in message) ? [message] : [];
         });
@@ -127,8 +127,11 @@ function createOracles(): Array<[string, Oracle]> {
         const requests = sentRequests(context.scenario);
         const requestById = indexRequestsById(requests);
         const seenResponses = new Set<string>();
+        const concurrentHttpRequests = context.transport === "streamable-http"
+          && context.scenario.steps.some((step) => (step.type === "send" || step.type === "send-raw")
+            && step.wire?.transport === "streamable-http" && step.wire.fault === "concurrent-requests");
         const findings: FindingDraft[] = [];
-        for (const line of parseStdout(context.trace)) {
+        for (const line of parseResponseMessages(context)) {
           const message = asRecord(line.value);
           if (message === undefined || !("result" in message || "error" in message)) {
             continue;
@@ -142,7 +145,7 @@ function createOracles(): Array<[string, Oracle]> {
             violation = "invalid-response";
           } else if (request === undefined) {
             violation = "unmatched-response-id";
-          } else if (seenResponses.has(key)) {
+          } else if (seenResponses.has(key) && !concurrentHttpRequests) {
             violation = "duplicate-response";
           } else {
             seenResponses.add(key);
@@ -164,7 +167,7 @@ function createOracles(): Array<[string, Oracle]> {
         const requests = sentRequests(context.scenario);
         const requestById = indexRequestsById(requests);
         const findings: FindingDraft[] = [];
-        for (const line of parseStdout(context.trace)) {
+        for (const line of parseResponseMessages(context)) {
           if (line.error !== undefined || !isJsonRpcMessage(line.value)) {
             continue;
           }
@@ -209,7 +212,7 @@ function createOracles(): Array<[string, Oracle]> {
         const requests = sentRequests(context.scenario);
         const requestById = indexRequestsById(requests);
         const findings: FindingDraft[] = [];
-        for (const line of parseStdout(context.trace)) {
+        for (const line of parseResponseMessages(context)) {
           const message = asRecord(line.value);
           const error = message === undefined ? undefined : asRecord(message.error);
           const id = message === undefined ? undefined : readId(message.id);
@@ -233,7 +236,7 @@ function createOracles(): Array<[string, Oracle]> {
     }],
     ["error-leak", {
       evaluate(context) {
-        const leaked = parseStdout(context.trace).some((line) => {
+        const leaked = parseResponseMessages(context).some((line) => {
           const message = asRecord(line.value);
           const error = message === undefined ? undefined : asRecord(message.error);
           if (error === undefined) {
@@ -258,7 +261,7 @@ function createOracles(): Array<[string, Oracle]> {
           request.message.jsonrpc !== "2.0"
           || typeof request.message.method !== "string"
           || (request.message.id !== undefined && readId(request.message.id) === undefined));
-        const responses = parseStdout(context.trace).flatMap((line) => {
+        const responses = parseResponseMessages(context).flatMap((line) => {
           const message = asRecord(line.value);
           return message !== undefined && "result" in message ? [message] : [];
         });
@@ -274,9 +277,82 @@ function createOracles(): Array<[string, Oracle]> {
         )];
       },
     }],
+    ["http-transport", {
+      evaluate(context) {
+        if (context.transport !== "streamable-http" || context.httpExchanges === undefined) {
+          return [];
+        }
+        const findings: FindingDraft[] = [];
+        for (const exchange of context.httpExchanges) {
+          if (exchange.requestMethod !== "POST" || exchange.requestFault !== undefined || exchange.responseAborted === true) {
+            continue;
+          }
+          let request: unknown;
+          try {
+            request = JSON.parse(exchange.requestBody) as unknown;
+          } catch {
+            continue;
+          }
+          const message = asRecord(request);
+          if (message === undefined) {
+            continue;
+          }
+          const isNotification = !("id" in message);
+          if (isNotification) {
+            if (exchange.responseStatus >= 200 && exchange.responseStatus < 300
+              && (exchange.responseStatus !== 202 || exchange.responseBody.length !== 0)) {
+              findings.push(draft(
+                context,
+                "http.notification-response",
+                `notification-response:${message.method ?? "unknown-method"}`,
+                "The server accepted an HTTP notification without returning 202 Accepted and an empty body.",
+              ));
+            }
+            continue;
+          }
+          if (exchange.responseStatus < 200 || exchange.responseStatus >= 300) {
+            continue;
+          }
+          const contentType = readHeader(exchange.responseHeaders, "content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+          if (contentType !== "application/json" && contentType !== "text/event-stream") {
+            findings.push(draft(
+              context,
+              "http.response-media-type",
+              `response-media-type:${contentType ?? "missing"}`,
+              "The server returned a successful HTTP response without an allowed JSON or event-stream media type.",
+            ));
+            continue;
+          }
+          const responseMessages = contentType === "application/json"
+            ? [exchange.responseBody]
+            : parseHttpEventData(exchange.responseBody);
+          const validBody = responseMessages.length > 0 && responseMessages.every((body) => {
+            try {
+              return isJsonRpcMessage(JSON.parse(body) as unknown);
+            } catch {
+              return false;
+            }
+          });
+          if (!validBody) {
+            findings.push(draft(
+              context,
+              "http.response-body-invalid",
+              `response-body-invalid:${contentType}`,
+              "The server returned a successful HTTP response whose body did not contain a JSON-RPC message.",
+            ));
+          }
+        }
+        return findings;
+      },
+    }],
     ["resource-usage", {
       evaluate(context) {
-        const traceBytes = context.outcome.stdoutBytes + context.outcome.stderrBytes;
+        const traceBytes = context.transport === "stdio"
+          ? context.outcome.stdoutBytes + context.outcome.stderrBytes
+          : (context.httpExchanges ?? []).reduce(
+            (total, exchange) => total + Buffer.byteLength(exchange.responseBody),
+            0,
+          );
         if (traceBytes <= MAX_TRACE_BYTES) {
           return [];
         }
@@ -284,7 +360,7 @@ function createOracles(): Array<[string, Oracle]> {
           context,
           "resource-usage.outlier",
           "trace-output-over-1mib",
-          `The target produced ${traceBytes} bytes of stdout and stderr during this scenario.`,
+          `The target produced ${traceBytes} bytes of transport output during this scenario.`,
         )];
       },
     }],
@@ -317,7 +393,19 @@ function draft(
 
 function stableTraceEvidence(context: OracleContext, includeProcess = false): TraceEvent[] {
   const evidence: TraceEvent[] = [];
-  for (const channel of ["stdin", "stdout", "stderr"] as const) {
+  if (context.transport === "streamable-http") {
+    evidence.push(...context.trace.events
+      .filter((event) => event.channel === "http-request" || event.channel === "http-response")
+      .map((event) => ({ ...event, offsetMs: 0 })));
+    if (includeProcess) {
+      evidence.push(...context.trace.events
+        .filter((event) => event.channel === "process")
+        .map((event) => ({ ...event, offsetMs: 0 })));
+    }
+    return evidence;
+  }
+  const channels = ["stdin", "stdout", "stderr"] as const;
+  for (const channel of channels) {
     const channelEvents = context.trace.events.filter((event) => event.channel === channel);
     if (channelEvents.length === 0) {
       continue;
@@ -339,6 +427,36 @@ function stableTraceEvidence(context: OracleContext, includeProcess = false): Tr
       .map((event) => ({ ...event, offsetMs: 0 })));
   }
   return evidence;
+}
+
+function parseResponseMessages(context: OracleContext): ParsedLine[] {
+  return context.transport === "stdio"
+    ? parseStdout(context.trace)
+    : context.responses.map((value) => ({ value }));
+}
+
+function readHeader(headers: Record<string, string | string[]>, name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parseHttpEventData(body: string): string[] {
+  const messages: string[] = [];
+  let data: string[] = [];
+  for (const line of body.split(/\r?\n/u)) {
+    if (line.length === 0) {
+      if (data.length > 0 && data.join("\n").length > 0) {
+        messages.push(data.join("\n"));
+        data = [];
+      }
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice(5).replace(/^ /u, ""));
+    }
+  }
+  if (data.length > 0 && data.join("\n").length > 0) {
+    messages.push(data.join("\n"));
+  }
+  return messages;
 }
 
 function parseStdout(trace: OracleContext["trace"]): ParsedLine[] {

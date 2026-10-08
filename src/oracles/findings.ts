@@ -61,5 +61,6 @@ function toEvidenceExcerpt(event: TraceEvent): EvidenceExcerpt {
     originalLengthBytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
     truncated: bytes.length > excerpt.length,
+    ...(event.http === undefined ? {} : { http: event.http }),
   };
 }

@@ -1,12 +1,9 @@
-import type { JsonValue, Scenario, Trace, TraceEvent } from "../core/types.js";
-import type { StdioRunOutcome } from "../transports/stdio/runner.js";
+import type { JsonValue, Scenario, TraceEvent } from "../core/types.js";
+import type { TransportRunResult } from "../transports/types.js";
 import type { SpecRules } from "../spec/rules.js";
 
-export interface OracleContext {
+export interface OracleContext extends TransportRunResult {
   scenario: Scenario;
-  trace: Trace;
-  responses: JsonValue[];
-  outcome: StdioRunOutcome;
   rules: SpecRules;
   livenessProbe?: { passed: boolean; evidence?: TraceEvent[] };
   baselineComparison?: { before: JsonValue; after: JsonValue };

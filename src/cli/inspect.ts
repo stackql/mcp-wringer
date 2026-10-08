@@ -3,15 +3,31 @@ import type { JsonValue, Scenario, SpecRevision } from "../core/types.js";
 import { specProfiles } from "../spec/profiles.js";
 import type { InspectedSurface, InspectedTool } from "../target/surface.js";
 import { transportRegistry } from "../transports/registry.js";
+import type { TransportTargetOptions } from "../transports/types.js";
 
 export type { InspectedSurface, InspectedTool } from "../target/surface.js";
 
-export async function inspectServer(
+export function inspectServer(specRevision: SpecRevision, target: TransportTargetOptions): Promise<InspectedSurface>;
+export function inspectServer(
   specRevision: SpecRevision,
   command: string,
   args: string[],
+  options?: { env?: Record<string, string>; inheritEnvironment?: boolean; timeoutMs?: number },
+): Promise<InspectedSurface>;
+export async function inspectServer(
+  specRevision: SpecRevision,
+  targetOrCommand: TransportTargetOptions | string,
+  args?: string[],
   options: { env?: Record<string, string>; inheritEnvironment?: boolean; timeoutMs?: number } = {},
 ): Promise<InspectedSurface> {
+  const target: TransportTargetOptions = typeof targetOrCommand === "string"
+    ? {
+      transport: "stdio",
+      command: targetOrCommand,
+      args: args ?? [],
+      ...options,
+    }
+    : targetOrCommand;
   const profile = specProfiles.get(specRevision);
   const methods = [
     profile.toolListMethod,
@@ -34,13 +50,9 @@ export async function inspectServer(
     description: "Read-only MCP surface inspection.",
     steps,
   };
-  const { responses } = await transportRegistry.get("stdio")({
-    command,
-    args,
+  const { responses } = await transportRegistry.get(target.transport ?? "stdio").run({
+    ...target,
     scenario,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {
     throw new ScenarioError("Target did not return all expected responses during inspection.");

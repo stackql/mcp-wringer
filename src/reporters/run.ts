@@ -2,13 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Finding, Reproducer } from "../core/types.js";
 import { createReproducer, saveReproducer } from "../core/reproducer.js";
+import type { ReproducerTargetInput } from "../core/reproducer.js";
 import type { FuzzRunResult } from "../core/run.js";
 
 export interface RunReportOptions {
   directory: string;
   run: FuzzRunResult;
-  command: string;
-  args: string[];
+  target: ReproducerTargetInput;
   environmentNames: string[];
 }
 
@@ -36,8 +36,7 @@ export async function writeRunReports(options: RunReportOptions): Promise<string
   await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   const paths = [findingsPath, metadataPath];
   const target = {
-    command: options.command,
-    args: options.args,
+    ...options.target,
     environmentNames: [...new Set(options.environmentNames)].sort(),
   };
   for (const item of run.reproducers) {

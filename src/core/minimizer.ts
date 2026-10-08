@@ -2,23 +2,17 @@ import { performance } from "node:perf_hooks";
 import { ScenarioError } from "./errors.js";
 import type { Scenario } from "./types.js";
 import { runSingleScenario } from "./run.js";
-import type { FuzzRunOptions } from "./run.js";
+import type { FuzzSingleScenarioOptions } from "./run.js";
 import type { InspectedSurface } from "../target/surface.js";
 import type { SafetyPolicy } from "./safety.js";
 
-export interface MinimizeOptions {
+export type MinimizeOptions = FuzzSingleScenarioOptions & {
   scenario: Scenario;
   findingId: string;
-  command: string;
-  args: string[];
   surface: InspectedSurface;
   safety?: SafetyPolicy;
-  env?: Record<string, string>;
-  inheritEnvironment?: boolean;
-  confirmations?: number;
   timeBudgetMs?: number;
-  timeoutMs?: number;
-}
+};
 
 export interface MinimizeResult {
   scenario: Scenario;
@@ -70,18 +64,10 @@ async function confirmScenario(
   let attempts = 0;
   for (let index = 0; index < confirmations && performance.now() < deadline; index += 1) {
     const result = await runSingleScenario({
-      command: options.command,
-      args: options.args,
+      ...options,
       revision: scenario.specRevision,
       scenario,
       surface: options.surface,
-      ...(options.safety === undefined ? {} : { safety: options.safety }),
-      ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    } satisfies Omit<FuzzRunOptions, "profile" | "cases" | "durationMs" | "workers" | "restartPolicy"> & {
-      scenario: Scenario;
-      surface: InspectedSurface;
     });
     attempts += 1;
     if (result.findings.some((finding) => finding.id === options.findingId)) {

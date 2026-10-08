@@ -81,6 +81,24 @@
       "severity": "info",
       "title": "Target produced an unusually large trace",
       "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#stdio (observational only; the transport defines no size limit)"
+    },
+    {
+      "id": "http.response-media-type",
+      "severity": "medium",
+      "title": "HTTP request response used an unsupported media type",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#streamable-http"
+    },
+    {
+      "id": "http.notification-response",
+      "severity": "medium",
+      "title": "HTTP notification did not receive an empty 202 response",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#sending-messages-to-the-server"
+    },
+    {
+      "id": "http.response-body-invalid",
+      "severity": "medium",
+      "title": "HTTP response body did not contain valid JSON-RPC data",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#sending-messages-to-the-server"
     }
   ]
 }
