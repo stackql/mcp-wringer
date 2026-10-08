@@ -1,8 +1,10 @@
 import { ExtensionRegistry } from "../core/registry.js";
 import type { JsonValue, ScenarioStep, SpecRevision } from "../core/types.js";
+import { specRules, type SpecRules } from "./rules.js";
 
 export interface SpecProfile {
   readonly revision: SpecRevision;
+  readonly rules: SpecRules;
   readonly lifecycleSteps: (requestIdPrefix: string) => ScenarioStep[];
   readonly request: (method: string, id: string | number, params?: JsonValue) => JsonValue;
   readonly livenessProbe: (id: string | number) => JsonValue;
@@ -20,6 +22,7 @@ const capabilities = {};
 
 const legacyProfile: SpecProfile = {
   revision: "2025-11-25",
+  rules: specRules["2025-11-25"],
   lifecycleSteps(prefix) {
     const initializeId = `${prefix}-initialize`;
     return [
@@ -64,6 +67,7 @@ const legacyProfile: SpecProfile = {
 
 const statelessProfile: SpecProfile = {
   revision: "2026-07-28",
+  rules: specRules["2026-07-28"],
   lifecycleSteps() {
     return [];
   },

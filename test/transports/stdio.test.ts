@@ -59,6 +59,8 @@ describe.each(["2025-11-25", "2026-07-28"] as const)("stdio replay for %s", (rev
           ...expectedResult,
           _meta: { "io.modelcontextprotocol/serverInfo": { name: "mcp-wringer-fixture", version: "0.1.0" } },
           resultType: "complete",
+          cacheScope: "public",
+          ttlMs: 0,
         }
       : expectedResult;
     const responseLines = [

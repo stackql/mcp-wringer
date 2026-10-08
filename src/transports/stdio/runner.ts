@@ -12,6 +12,22 @@ export interface StdioRunOptions extends SpawnTargetOptions {
 export interface StdioRunResult {
   trace: Trace;
   responses: JsonValue[];
+  outcome: StdioRunOutcome;
+}
+
+export interface StdioRunFailure {
+  kind: "timeout" | "target-exit" | "transport-error";
+  phase: "response" | "shutdown" | "transport";
+  message: string;
+}
+
+export interface StdioRunOutcome {
+  failure?: StdioRunFailure;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  stdoutBytes: number;
+  stderrBytes: number;
 }
 
 export async function runStdioScenario(options: StdioRunOptions): Promise<StdioRunResult> {
@@ -22,12 +38,15 @@ export async function runStdioScenario(options: StdioRunOptions): Promise<StdioR
   let outputBuffer = Buffer.alloc(0);
   let spawnError: Error | undefined;
   let closed = false;
+  let exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let failure: StdioRunFailure | undefined;
   const responses: JsonValue[] = [];
 
   const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => {
+      exitStatus = { code, signal };
       recorder.add("process", Buffer.from(`exit code=${String(code)} signal=${String(signal)}`));
-      resolve({ code, signal });
+      resolve(exitStatus);
     });
   });
 
@@ -69,15 +88,35 @@ export async function runStdioScenario(options: StdioRunOptions): Promise<StdioR
   try {
     await waitForSpawn(child, spawnError, options.timeoutMs ?? 5_000);
     for (const step of options.scenario.steps) {
-      const response = await executeStep(step, child, frames, recorder);
-      if (response !== undefined) {
-        responses.push(response);
+      try {
+        const response = await executeStep(step, child, frames, recorder);
+        if (response !== undefined) {
+          responses.push(response);
+        }
+      } catch (error) {
+        if (!(error instanceof TransportError)) {
+          throw error;
+        }
+        failure = classifyFailure(error, exitStatus);
+        break;
       }
     }
-    if (!child.stdin?.destroyed) {
-      child.stdin?.end();
+    if (failure === undefined) {
+      if (!child.stdin?.destroyed) {
+        child.stdin?.end();
+      }
+      try {
+        await waitForExit(exitPromise, options.timeoutMs ?? 5_000);
+      } catch (error) {
+        if (!(error instanceof TargetError)) {
+          throw error;
+        }
+        failure = { kind: "timeout", phase: "shutdown", message: error.message };
+      }
     }
-    await waitForExit(exitPromise, options.timeoutMs ?? 5_000);
+    if (failure !== undefined) {
+      await terminateTarget(child);
+    }
   } catch (error) {
     await terminateTarget(child);
     throw error;
@@ -86,7 +125,17 @@ export async function runStdioScenario(options: StdioRunOptions): Promise<StdioR
     recorder.flush();
   }
 
-  return { trace: recorder.toTrace(), responses };
+  return {
+    trace: recorder.toTrace(),
+    responses,
+    outcome: {
+      ...(failure === undefined ? {} : { failure }),
+      exitCode: exitStatus?.code ?? null,
+      signal: exitStatus?.signal ?? null,
+      durationMs: Math.max(0, performance.now() - startedAt),
+      ...recorder.byteCounts(),
+    },
+  };
 }
 
 async function executeStep(
@@ -298,6 +347,8 @@ class TraceRecorder {
   readonly #scenarioId: string;
   readonly #revision: Scenario["specRevision"];
   readonly #redactors = new Map<"stdout" | "stderr", ByteRedactor>();
+  #stdoutBytes = 0;
+  #stderrBytes = 0;
   #order = 0;
 
   constructor(scenarioId: string, revision: Scenario["specRevision"], startedAt: number, secrets: string[]) {
@@ -310,6 +361,11 @@ class TraceRecorder {
 
   add(channel: TraceEvent["channel"], bytes: Buffer): void {
     const offsetMs = Math.max(0, performance.now() - this.#startedAt);
+    if (channel === "stdout") {
+      this.#stdoutBytes += bytes.length;
+    } else if (channel === "stderr") {
+      this.#stderrBytes += bytes.length;
+    }
     const safeBytes = channel === "stdout" || channel === "stderr"
       ? this.#redactors.get(channel)?.push(bytes) ?? bytes
       : bytes;
@@ -341,6 +397,10 @@ class TraceRecorder {
     };
   }
 
+  byteCounts(): { stdoutBytes: number; stderrBytes: number } {
+    return { stdoutBytes: this.#stdoutBytes, stderrBytes: this.#stderrBytes };
+  }
+
   #push(channel: TraceEvent["channel"], bytes: Buffer, offsetMs: number): void {
     const text = bytes.toString("utf8");
     const encoding = Buffer.from(text, "utf8").equals(bytes) ? "utf8" : "base64";
@@ -354,6 +414,7 @@ class TraceRecorder {
     this.#events.push(event);
     this.#events.sort((a, b) => a.offsetMs - b.offsetMs || a.order - b.order);
   }
+
 }
 
 class ByteRedactor {
@@ -409,6 +470,20 @@ class ByteRedactor {
     }
     return result;
   }
+}
+
+function classifyFailure(
+  error: TransportError,
+  exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined,
+): StdioRunFailure {
+  const message = error.message;
+  if (/timed out/i.test(message)) {
+    return { kind: "timeout", phase: "response", message };
+  }
+  if (exitStatus !== undefined) {
+    return { kind: "target-exit", phase: "transport", message };
+  }
+  return { kind: "transport-error", phase: "transport", message };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

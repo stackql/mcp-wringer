@@ -83,7 +83,18 @@ export interface Finding {
   severity: FindingSeverity;
   title: string;
   message: string;
-  evidence: TraceEvent[];
+  cite: string;
+  occurrences: number;
+  evidence: EvidenceExcerpt[];
+}
+
+export interface EvidenceExcerpt {
+  channel: TraceEvent["channel"];
+  encoding: TraceEvent["encoding"];
+  data: string;
+  originalLengthBytes: number;
+  sha256: string;
+  truncated: boolean;
 }
 
 export interface TargetDescriptor {

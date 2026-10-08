@@ -1,0 +1,85 @@
+{
+  "revision": "2025-11-25",
+  "errorCodes": {
+    "parseError": -32700,
+    "invalidRequest": -32600,
+    "methodNotFound": -32601,
+    "invalidParams": -32602,
+    "internalError": -32603
+  },
+  "responseSchemas": {
+    "initialize": "InitializeResult",
+    "ping": "EmptyResult",
+    "tools/list": "ListToolsResult",
+    "resources/list": "ListResourcesResult",
+    "prompts/list": "ListPromptsResult"
+  },
+  "rules": [
+    {
+      "id": "crash.process-exit",
+      "severity": "high",
+      "title": "Target exited during a scenario",
+      "cite": "JSON-RPC 2.0 §4 Request object; https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#stdio"
+    },
+    {
+      "id": "hang.request-timeout",
+      "severity": "high",
+      "title": "Target did not answer a request",
+      "cite": "JSON-RPC 2.0 §4 Request object; https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/lifecycle.mdx#operation"
+    },
+    {
+      "id": "liveness.probe-failed",
+      "severity": "high",
+      "title": "Target failed its liveness probe",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/utilities/ping.mdx"
+    },
+    {
+      "id": "state-consistency.baseline-changed",
+      "severity": "high",
+      "title": "Baseline response changed after a scenario",
+      "cite": "JSON-RPC 2.0 §4 Request and response objects; https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/lifecycle.mdx#operation"
+    },
+    {
+      "id": "stdout-pollution.non-protocol-bytes",
+      "severity": "medium",
+      "title": "Target wrote non-protocol bytes to stdout",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#stdio"
+    },
+    {
+      "id": "jsonrpc-contract.invalid-message",
+      "severity": "medium",
+      "title": "Target emitted an invalid JSON-RPC message",
+      "cite": "JSON-RPC 2.0 §4 Request, notification, and response objects"
+    },
+    {
+      "id": "schema-response.invalid-result",
+      "severity": "medium",
+      "title": "Target response does not match the revision schema",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/schema.mdx"
+    },
+    {
+      "id": "error-code.unexpected-code",
+      "severity": "low",
+      "title": "Target returned the wrong JSON-RPC error code",
+      "cite": "JSON-RPC 2.0 §5.1 Error object"
+    },
+    {
+      "id": "error-leak.sensitive-detail",
+      "severity": "low",
+      "title": "Target exposed internal error details",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/server/tools.mdx#error-handling (diagnostic heuristic; detailed errors are not prohibited by this section)"
+    },
+    {
+      "id": "accepted-malformed.success-response",
+      "severity": "info",
+      "title": "Target accepted a malformed request",
+      "cite": "JSON-RPC 2.0 §4.2 Notification; §5.1 Invalid Request"
+    },
+    {
+      "id": "resource-usage.outlier",
+      "severity": "info",
+      "title": "Target produced an unusually large trace",
+      "cite": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0a11bf68c7ec4473526ec15589f592afcd12d1e8/docs/specification/2025-11-25/basic/transports.mdx#stdio (observational only; the transport defines no size limit)"
+    }
+  ]
+}
