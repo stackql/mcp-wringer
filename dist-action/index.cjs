@@ -8612,6 +8612,7 @@ function errorMessage(error) {
 var StdioScenarioSession = class {
   #child;
   #frames = new AsyncQueue();
+  #unmatched = /* @__PURE__ */ new Map();
   #recorder;
   #startedAt;
   #timeoutMs;
@@ -8688,11 +8689,12 @@ var StdioScenarioSession = class {
     const byteStart = this.#recorder.byteCounts();
     const responses = [];
     let failure;
+    this.#unmatched.clear();
     try {
       await waitForSpawn(this.#child, this.#spawnError, this.#timeoutMs);
       for (const step of scenario.steps) {
         try {
-          const response = await executeStep(step, this.#child, this.#frames, this.#recorder);
+          const response = await executeStep(step, this.#child, this.#frames, this.#unmatched, this.#recorder);
           if (response !== void 0) {
             responses.push(response);
           }
@@ -8764,7 +8766,7 @@ async function runStdioScenario(options) {
   const session = new StdioScenarioSession(options);
   return session.execute(options.scenario);
 }
-async function executeStep(step, child, frames, recorder) {
+async function executeStep(step, child, frames, unmatched, recorder) {
   switch (step.type) {
     case "send": {
       if (step.wire !== void 0 && step.wire.transport !== "stdio") {
@@ -8784,7 +8786,7 @@ async function executeStep(step, child, frames, recorder) {
       return void 0;
     }
     case "await-response":
-      return readResponse(frames, step.id, step.timeoutMs ?? 5e3);
+      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? 5e3);
     case "transport":
       if (step.operation !== "close-stdin") {
         throw new ScenarioError(`Transport operation '${step.operation}' cannot run over stdio.`);
@@ -8832,7 +8834,14 @@ async function writeChunk(stream2, chunk) {
     });
   });
 }
-async function readResponse(frames, expectedId, timeoutMs) {
+async function readResponse(frames, unmatched, expectedId, timeoutMs) {
+  if (expectedId !== void 0) {
+    const stashed = unmatched.get(expectedId);
+    if (stashed !== void 0) {
+      unmatched.delete(expectedId);
+      return stashed;
+    }
+  }
   const deadline = import_node_perf_hooks.performance.now() + timeoutMs;
   while (true) {
     const remaining = deadline - import_node_perf_hooks.performance.now();
@@ -8848,6 +8857,9 @@ async function readResponse(frames, expectedId, timeoutMs) {
     }
     if (expectedId === void 0 || isRecord4(message) && message.id === expectedId) {
       return message;
+    }
+    if (isRecord4(message) && (typeof message.id === "string" || typeof message.id === "number")) {
+      unmatched.set(message.id, message);
     }
   }
 }
@@ -9276,6 +9288,7 @@ var HttpScenarioSession = class {
     }
     const fault = wire?.fault;
     const headers = createRequestHeaders(this.#options.url, scenario.specRevision, this.#sessionId);
+    addMirroredHeaders(headers, scenario.specRevision, message, body);
     const method = fault === "wrong-method" ? "PUT" : "POST";
     applyHeaderFault(headers, fault, scenario.specRevision);
     if (fault === "truncated-body" || fault === "abort-response") {
@@ -9359,23 +9372,22 @@ var HttpScenarioSession = class {
     }
   }
   #queueMessages(body, headers, statusCode) {
-    if (statusCode < 200 || statusCode >= 300) {
-      return;
-    }
+    const success = statusCode >= 200 && statusCode < 300;
     const contentType = headerValue(headers, "content-type")?.split(";", 1)[0]?.trim().toLowerCase();
     if (body.length === 0) {
       return;
     }
     const messages = [];
-    if (contentType === "text/event-stream") {
+    if (contentType === "text/event-stream" && success) {
       for (const data of parseSseData(body)) {
         parseJsonMessages(data, messages);
       }
-    } else if (contentType === "application/json" || contentType === void 0) {
+    } else if (contentType === "application/json" || contentType === void 0 && success) {
       parseJsonMessages(body, messages);
     }
-    this.#pendingResponses.push(...messages);
-    this.#observedResponses.push(...messages);
+    const accepted = success ? messages : messages.filter((message) => isRecord5(message) && isRecord5(message.error));
+    this.#pendingResponses.push(...accepted);
+    this.#observedResponses.push(...accepted);
   }
   #takeResponse(id) {
     const index = this.#pendingResponses.findIndex((value) => {
@@ -9418,6 +9430,41 @@ function createRequestHeaders(url, revision, sessionId) {
     headers["MCP-Session-Id"] = sessionId;
   }
   return headers;
+}
+var NAME_HEADER_METHODS = {
+  "tools/call": "name",
+  "prompts/get": "name",
+  "resources/read": "uri"
+};
+function addMirroredHeaders(headers, revision, message, body) {
+  if (scenarioIsLegacy(revision)) {
+    return;
+  }
+  let value = message;
+  if (value === void 0) {
+    try {
+      value = JSON.parse(body.toString("utf8"));
+    } catch {
+      return;
+    }
+  }
+  if (!isRecord5(value) || typeof value.method !== "string") {
+    return;
+  }
+  if (isPlainHeaderValue(value.method)) {
+    headers["Mcp-Method"] = value.method;
+  }
+  const nameField = NAME_HEADER_METHODS[value.method];
+  const params = value.params;
+  if (nameField !== void 0 && isRecord5(params) && typeof params[nameField] === "string") {
+    headers["Mcp-Name"] = encodeHeaderValue(params[nameField]);
+  }
+}
+function isPlainHeaderValue(value) {
+  return /^[\x21-\x7E](?:[\x20-\x7E\t]*[\x21-\x7E])?$/u.test(value) && !(value.startsWith("=?base64?") && value.endsWith("?="));
+}
+function encodeHeaderValue(value) {
+  return isPlainHeaderValue(value) ? value : `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 function applyHeaderFault(headers, fault, revision) {
   switch (fault) {
@@ -9880,6 +9927,13 @@ async function inspectServer(specRevision, targetOrCommand, args, options = {}) 
     ...target,
     scenario
   });
+  const rejection = responses.find((response) => isRecord6(response) && isRecord6(response.error));
+  if (rejection !== void 0 && isRecord6(rejection) && isRecord6(rejection.error)) {
+    const { code, message } = rejection.error;
+    throw new TargetError(
+      `Target rejected inspection for spec revision ${specRevision}: error ${String(code)} ${typeof message === "string" ? message : ""}`.trimEnd()
+    );
+  }
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {
     throw new ScenarioError("Target did not return all expected responses during inspection.");
   }
@@ -15026,7 +15080,7 @@ function register(name, generator) {
 for (const name of generatorNames) {
   register(name, { generate: (context) => generateByName(name, context) });
 }
-function generateScenarios(revision, surface, seed, count, names = generatorNames, transport = "stdio", argumentStrategies, startIndex = 0) {
+function generateScenarios(revision, surface, seed, count, names = generatorNames, transport = "stdio", argumentStrategies, startIndex = 0, allowTools) {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
   if (selected.length === 0 || count <= 0) {
@@ -15045,7 +15099,8 @@ function generateScenarios(revision, surface, seed, count, names = generatorName
       surface,
       caseIndex,
       transport,
-      ...argumentStrategies === void 0 ? {} : { argumentStrategies }
+      ...argumentStrategies === void 0 ? {} : { argumentStrategies },
+      ...allowTools === void 0 ? {} : { allowTools }
     };
     scenarios.push(generatorRegistry.get(name).generate(context));
   }
@@ -15112,7 +15167,10 @@ function generateByName(name, context) {
       steps = context.transport === "streamable-http" ? httpWireFaultSteps(context, id) : wireFaultSteps(context, id);
       break;
   }
-  const bootstrap = context.revision === "2026-07-28" ? requestSteps(profile, "server/discover", `${id}-discover`) : [];
+  const bootstrap = context.revision === "2026-07-28" ? [
+    { type: "send", message: profile.request("server/discover", `${id}-discover`) },
+    { type: "await-response", id: `${id}-discover` }
+  ] : [];
   return {
     formatVersion: 1,
     id,
@@ -15122,7 +15180,12 @@ function generateByName(name, context) {
   };
 }
 function toolCallSteps(context, id) {
-  const tool = context.surface.tools.filter((candidate) => candidate.safety === "read-only").sort((left, right) => left.name.localeCompare(right.name))[0];
+  const allowed = new Set(context.allowTools ?? []);
+  const tool = pickBySeed(
+    context.surface.tools.filter((candidate) => candidate.safety === "read-only" || allowed.has(candidate.name)).sort((left, right) => compareStrings(left.name, right.name)),
+    context.seed,
+    "tool"
+  );
   if (tool === void 0) {
     return requestSteps(specProfiles.get(context.revision), "tools/list", `${id}-tools`);
   }
@@ -15132,7 +15195,11 @@ function toolCallSteps(context, id) {
 }
 function resourceSteps(context, id) {
   const profile = specProfiles.get(context.revision);
-  const resource = [...context.surface.resources].sort((left, right) => left.uri.localeCompare(right.uri))[0];
+  const resource = pickBySeed(
+    [...context.surface.resources].sort((left, right) => compareStrings(left.uri, right.uri)),
+    context.seed,
+    "resource"
+  );
   if (resource === void 0) {
     return requestSteps(profile, profile.resourceListMethod, `${id}-resources`);
   }
@@ -15140,7 +15207,11 @@ function resourceSteps(context, id) {
 }
 function promptSteps(context, id) {
   const profile = specProfiles.get(context.revision);
-  const prompt = [...context.surface.prompts].sort((left, right) => left.name.localeCompare(right.name))[0];
+  const prompt = pickBySeed(
+    [...context.surface.prompts].sort((left, right) => compareStrings(left.name, right.name)),
+    context.seed,
+    "prompt"
+  );
   if (prompt === void 0) {
     return requestSteps(profile, profile.promptListMethod, `${id}-prompts`);
   }
@@ -15255,6 +15326,15 @@ function sample3(arbitrary, seed) {
     throw new Error("Could not sample a value for a generated scenario.");
   }
   return value;
+}
+function pickBySeed(items, seed, label) {
+  if (items.length <= 1) {
+    return items[0];
+  }
+  return items[deriveSeed(seed, "select", label) % items.length];
+}
+function compareStrings(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 function asObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
@@ -23618,8 +23698,13 @@ function createOracles() {
           const id = readId(message.id);
           const key = id === void 0 ? void 0 : idKey(id);
           const request = key === void 0 ? void 0 : requestById.get(key);
+          const nullIdError = isNullIdError(message);
           let violation;
-          if (line.error !== void 0 || message.jsonrpc !== "2.0" || id === void 0 || key === void 0 || "result" in message && "error" in message) {
+          if (line.error !== void 0 || message.jsonrpc !== "2.0" || "result" in message && "error" in message) {
+            violation = "invalid-response";
+          } else if (nullIdError) {
+            violation = void 0;
+          } else if (id === void 0 || key === void 0) {
             violation = "invalid-response";
           } else if (request === void 0) {
             violation = "unmatched-response-id";
@@ -23647,6 +23732,9 @@ function createOracles() {
         const findings = [];
         for (const line of parseResponseMessages(context)) {
           if (line.error !== void 0 || !isJsonRpcMessage(line.value)) {
+            continue;
+          }
+          if (isRecord9(line.value) && isNullIdError(line.value)) {
             continue;
           }
           const messageValidation = validateAgainstSchema(context.rules.revision, "JSONRPCMessage", line.value);
@@ -23977,7 +24065,13 @@ function isJsonRpcMessage(value) {
   if (typeof value.method === "string") {
     return value.id === void 0 || readId(value.id) !== void 0;
   }
+  if (isNullIdError(value)) {
+    return true;
+  }
   return readId(value.id) !== void 0 && "result" in value !== "error" in value;
+}
+function isNullIdError(value) {
+  return value.id === null && "error" in value && !("result" in value);
 }
 function readId(value) {
   return typeof value === "string" || typeof value === "number" && Number.isFinite(value) ? value : void 0;
@@ -24180,7 +24274,9 @@ async function runFuzz(options) {
     caseLimit,
     options.generatorSequence ?? defaultGeneratorSequence,
     transportName,
-    options.argumentStrategies
+    options.argumentStrategies,
+    0,
+    options.safety?.allowTools
   ) : [];
   const deadline = startedAt + durationLimitMs;
   const caseResults = Array.from({ length: caseLimit });
@@ -24263,7 +24359,8 @@ async function runFuzz(options) {
           [selectedGenerator],
           transportName,
           options.argumentStrategies,
-          caseIndex
+          caseIndex,
+          options.safety?.allowTools
         );
         let session;
         let completedCases = 0;
@@ -24399,7 +24496,7 @@ async function runFuzz(options) {
       reproducers.push({ findingId: finding.id, scenario: origin.scenario });
     } else {
       diagnostics.push(
-        `Finding ${finding.id} (${finding.ruleId}) was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`
+        `Finding ${finding.id} (${finding.ruleId}) reproduced on only ${confirmationCount} of ${confirmations} confirmation attempts and is flaky.`
       );
     }
   }

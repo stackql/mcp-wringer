@@ -20,7 +20,7 @@ export default {
 };
 ```
 
-Register generators, argument strategies, oracles, reporters, coverage providers and profiles through the corresponding `api.register...` methods. Registry names must be unique and kebab-case. A generator should derive all generated values from its supplied seed/context. An oracle must use a rule ID that exists in the selected spec profile if it emits a finding. Coverage providers implement `collect(directory)` and declare whether they read `NODE_V8_COVERAGE` or `GOCOVERDIR`; only enable them for targets prepared to generate that format.
+Register generators, argument strategies, oracles, reporters, coverage providers and profiles through the corresponding `api.register...` methods. Registry names must be unique and kebab-case. A generator should derive all generated values from its supplied seed/context. A generator that emits `tools/call` must only name tools that are annotated `readOnlyHint: true` or listed in `GeneratorContext.allowTools` (exact names from the safety policy); the runner refuses other calls. An oracle must use a rule ID that exists in the selected spec profile if it emits a finding. Coverage providers implement `collect(directory)` and declare whether they read `NODE_V8_COVERAGE` or `GOCOVERDIR`; only enable them for targets prepared to generate that format.
 
 Configure a plugin by package name, absolute path, `file:` URL or path relative to the config file:
 

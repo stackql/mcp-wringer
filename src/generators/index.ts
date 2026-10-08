@@ -38,6 +38,7 @@ export function generateScenarios(
   transport: GeneratorContext["transport"] = "stdio",
   argumentStrategies?: readonly ArgumentStrategySelection[],
   startIndex = 0,
+  allowTools?: readonly string[],
 ): Scenario[] {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
@@ -58,6 +59,7 @@ export function generateScenarios(
       caseIndex,
       transport,
       ...(argumentStrategies === undefined ? {} : { argumentStrategies }),
+      ...(allowTools === undefined ? {} : { allowTools }),
     };
     scenarios.push(generatorRegistry.get(name).generate(context));
   }
@@ -127,8 +129,12 @@ function generateByName(name: (typeof generatorNames)[number], context: Generato
         : wireFaultSteps(context, id);
       break;
   }
-  const bootstrap = context.revision === "2026-07-28"
-    ? requestSteps(profile, "server/discover", `${id}-discover`)
+  // The bootstrap request is the first one after spawn, so like initialize it uses the default timeout to absorb startup.
+  const bootstrap: ScenarioStep[] = context.revision === "2026-07-28"
+    ? [
+      { type: "send", message: profile.request("server/discover", `${id}-discover`) },
+      { type: "await-response", id: `${id}-discover` },
+    ]
     : [];
   return {
     formatVersion: 1,
@@ -140,9 +146,14 @@ function generateByName(name: (typeof generatorNames)[number], context: Generato
 }
 
 function toolCallSteps(context: GeneratorContext, id: string): ScenarioStep[] {
-  const tool = context.surface.tools
-    .filter((candidate) => candidate.safety === "read-only")
-    .sort((left, right) => left.name.localeCompare(right.name))[0];
+  const allowed = new Set(context.allowTools ?? []);
+  const tool = pickBySeed(
+    context.surface.tools
+      .filter((candidate) => candidate.safety === "read-only" || allowed.has(candidate.name))
+      .sort((left, right) => compareStrings(left.name, right.name)),
+    context.seed,
+    "tool",
+  );
   if (tool === undefined) {
     return requestSteps(specProfiles.get(context.revision), "tools/list", `${id}-tools`);
   }
@@ -153,7 +164,11 @@ function toolCallSteps(context: GeneratorContext, id: string): ScenarioStep[] {
 
 function resourceSteps(context: GeneratorContext, id: string): ScenarioStep[] {
   const profile = specProfiles.get(context.revision);
-  const resource = [...context.surface.resources].sort((left, right) => left.uri.localeCompare(right.uri))[0];
+  const resource = pickBySeed(
+    [...context.surface.resources].sort((left, right) => compareStrings(left.uri, right.uri)),
+    context.seed,
+    "resource",
+  );
   if (resource === undefined) {
     return requestSteps(profile, profile.resourceListMethod, `${id}-resources`);
   }
@@ -162,7 +177,11 @@ function resourceSteps(context: GeneratorContext, id: string): ScenarioStep[] {
 
 function promptSteps(context: GeneratorContext, id: string): ScenarioStep[] {
   const profile = specProfiles.get(context.revision);
-  const prompt = [...context.surface.prompts].sort((left, right) => left.name.localeCompare(right.name))[0];
+  const prompt = pickBySeed(
+    [...context.surface.prompts].sort((left, right) => compareStrings(left.name, right.name)),
+    context.seed,
+    "prompt",
+  );
   if (prompt === undefined) {
     return requestSteps(profile, profile.promptListMethod, `${id}-prompts`);
   }
@@ -281,6 +300,19 @@ function sample<T>(arbitrary: fc.Arbitrary<T>, seed: number): T {
     throw new Error("Could not sample a value for a generated scenario.");
   }
   return value;
+}
+
+// The selection seed is derived separately so argument generation for a chosen target is unchanged.
+function pickBySeed<T>(items: readonly T[], seed: number, label: string): T | undefined {
+  if (items.length <= 1) {
+    return items[0];
+  }
+  return items[deriveSeed(seed, "select", label) % items.length];
+}
+
+// Locale-independent ordering keeps selection identical across hosts.
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function asObject(value: JsonValue): Record<string, JsonValue> {

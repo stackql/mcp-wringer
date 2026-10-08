@@ -14,6 +14,21 @@ describe.each(revisions)("clean stdio fixture for %s", (revision) => {
     setLiveness(context, "liveness");
     expect(evaluateOracles(context)).toEqual([]);
   });
+
+  it("accepts a JSON-RPC null-id error response to an unreadable request", async () => {
+    const context = await executeFixture(revision, cleanRequestSteps(revision));
+    setLiveness(context, "liveness");
+    const stdoutEvent = context.trace.events.find((event) => event.channel === "stdout");
+    if (stdoutEvent === undefined) {
+      throw new Error("The clean fixture wrote no stdout.");
+    }
+    context.trace.events.push({
+      ...stdoutEvent,
+      encoding: "utf8",
+      data: `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })}\n`,
+    });
+    expect(evaluateOracles(context)).toEqual([]);
+  });
 });
 
 describe("official MCP reference server", () => {

@@ -198,6 +198,8 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
       options.generatorSequence ?? defaultGeneratorSequence,
       transportName,
       options.argumentStrategies,
+      0,
+      options.safety?.allowTools,
     )
     : [];
   const deadline = startedAt + durationLimitMs;
@@ -294,6 +296,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
           transportName,
           options.argumentStrategies,
           caseIndex,
+          options.safety?.allowTools,
         );
         let session: TransportSession | undefined;
         let completedCases = 0;
@@ -435,7 +438,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
       reproducers.push({ findingId: finding.id, scenario: origin.scenario });
     } else {
       diagnostics.push(
-        `Finding ${finding.id} (${finding.ruleId}) was not reproduced on ${confirmationCount} of ${confirmations} fresh targets and is flaky.`,
+        `Finding ${finding.id} (${finding.ruleId}) reproduced on only ${confirmationCount} of ${confirmations} confirmation attempts and is flaky.`,
       );
     }
   }

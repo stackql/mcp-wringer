@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runFuzz, runSingleScenario } from "../../src/core/run.js";
 import { TargetError } from "../../src/core/errors.js";
+import { inspectServer } from "../../src/cli/inspect.js";
 import { createReproducer, loadReproducer, saveReproducer } from "../../src/core/reproducer.js";
 import type { JsonValue, Scenario, ScenarioStep, SpecRevision } from "../../src/core/types.js";
 import { specProfiles } from "../../src/spec/profiles.js";
@@ -287,6 +288,67 @@ it("supports attach mode on loopback and refuses non-loopback URLs by default", 
   }
 }, 15_000);
 
+it("surfaces JSON-RPC error bodies sent with HTTP error statuses", async () => {
+  const seenHeaders: Array<Record<string, string | string[] | undefined>> = [];
+  const server = createServer((request, response) => {
+    seenHeaders.push(request.headers);
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id?: string | number };
+      const id = request.headers["mcp-method"] === "tools/list" ? message.id : null;
+      response.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32022, message: "unsupported protocol version" },
+      }));
+    });
+  });
+  await new Promise<void>((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("HTTP rejection fixture did not bind a TCP address.");
+  }
+  const url = `http://127.0.0.1:${address.port}/mcp`;
+  try {
+    const revision: SpecRevision = "2026-07-28";
+    await expect(inspectServer(revision, { transport: "streamable-http", url }))
+      .rejects.toThrow(/rejected inspection.*-32022/u);
+    const profile = specProfiles.get(revision);
+    const scenario = createScenario(revision, "http-null-id-error", [
+      { type: "send", message: profile.request("resources/list", "unknown-id") },
+      { type: "await-response", id: "unknown-id", timeoutMs: 300 },
+    ]);
+    const result = await runSingleScenario({
+      transport: "streamable-http",
+      url,
+      revision,
+      scenario,
+      surface: withRevision(revision),
+    });
+    expect(result.result.responses.some((response) => isNullIdError(response))).toBe(true);
+    expect(result.findings.map((finding) => finding.ruleId)).not.toContain("jsonrpc-contract.invalid-message");
+    seenHeaders.length = 0;
+    const toolCall = createScenario(revision, "http-mirrored-headers", [
+      {
+        type: "send",
+        message: profile.request("prompts/get", "call-1", { name: "naïve prompt" }),
+      },
+      { type: "await-response", id: "call-1", timeoutMs: 300 },
+    ]);
+    await runSingleScenario({ transport: "streamable-http", url, revision, scenario: toolCall, surface: withRevision(revision) });
+    const promptHeaders = seenHeaders.find((headers) => headers["mcp-method"] === "prompts/get");
+    expect(promptHeaders?.["mcp-name"]).toBe(`=?base64?${Buffer.from("naïve prompt").toString("base64")}?=`);
+  } finally {
+    await new Promise<void>((resolveClose, reject) => {
+      server.close((error) => error ? reject(error) : resolveClose());
+    });
+  }
+}, 15_000);
+
 async function fixtureTarget(
   revision: SpecRevision,
   defect?: string,
@@ -337,6 +399,11 @@ function requestSteps(
 
 function createScenario(revision: SpecRevision, id: string, steps: ScenarioStep[]): Scenario {
   return { formatVersion: 1, id, specRevision: revision, steps };
+}
+
+function isNullIdError(value: JsonValue): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && value.id === null && typeof value.error === "object";
 }
 
 function withRevision(revision: SpecRevision): InspectedSurface {

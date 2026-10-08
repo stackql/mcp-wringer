@@ -109,6 +109,50 @@ describe.each(["2025-11-25", "2026-07-28"] as const)("stdio trace privacy for %s
 
 });
 
+describe("stdio response ordering", () => {
+  it("matches responses that arrive in a different order from their requests", async () => {
+    const reverseResponder = [
+      "const lines = [];",
+      "let buffer = '';",
+      "process.stdin.on('data', (chunk) => {",
+      "  buffer += chunk;",
+      "  let index;",
+      "  while ((index = buffer.indexOf('\\n')) >= 0) {",
+      "    lines.push(JSON.parse(buffer.slice(0, index)));",
+      "    buffer = buffer.slice(index + 1);",
+      "  }",
+      "  if (lines.length === 2) {",
+      "    for (const request of lines.reverse()) {",
+      "      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }) + '\\n');",
+      "    }",
+      "  }",
+      "});",
+    ].join("\n");
+    const request = (id: string) => ({ jsonrpc: "2.0" as const, id, method: "tools/list" });
+    const scenario: Scenario = {
+      formatVersion: 1,
+      id: "out-of-order",
+      specRevision: "2025-11-25",
+      steps: [
+        { type: "send", message: request("first") },
+        { type: "send", message: request("second") },
+        { type: "await-response", id: "first", timeoutMs: 2_000 },
+        { type: "await-response", id: "second", timeoutMs: 2_000 },
+      ],
+    };
+    const result = await runStdioScenario({
+      command: process.execPath,
+      args: ["-e", reverseResponder],
+      scenario,
+    });
+    expect(result.outcome.failure).toBeUndefined();
+    expect(result.responses).toEqual([
+      { jsonrpc: "2.0", id: "first", result: {} },
+      { jsonrpc: "2.0", id: "second", result: {} },
+    ]);
+  });
+});
+
 describe("inherited environment trace privacy", () => {
   it("redacts values inherited from the caller environment", async () => {
     const previousSecret = process.env.FIXTURE_EMIT_SECRET;

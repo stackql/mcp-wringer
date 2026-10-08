@@ -71,4 +71,6 @@ npx mcp-wringer run --transport streamable-http --url http://127.0.0.1:3000/mcp 
 
 Attach mode refuses non-loopback hosts unless `--allow-non-loopback` is supplied. Use that flag only for a target you own or are explicitly authorised to test. Reproducers can be replayed over the other transport with `--transport` and, for HTTP, `--url`.
 
+For `--spec 2026-07-28`, the HTTP adapter sends the `Mcp-Method` header on every request and the `Mcp-Name` header for `tools/call`, `prompts/get` and `resources/read`, as that revision requires. It does not yet mirror tool parameters declared with `x-mcp-header`. A server that rejects the selected revision during inspection, for example a stateful server asked for 2026-07-28, ends the run with exit code 3.
+
 Run the tool only against fixtures, the reference server, or a server you own or are authorised to test. Isolate the target and do not provide it with real credentials.

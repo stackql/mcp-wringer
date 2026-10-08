@@ -33,6 +33,7 @@ export type StdioRunOutcome = TransportRunOutcome;
 export class StdioScenarioSession implements TransportSession {
   readonly #child: ChildProcess;
   readonly #frames = new AsyncQueue<Buffer>();
+  readonly #unmatched = new Map<string | number, JsonValue>();
   readonly #recorder: TraceRecorder;
   readonly #startedAt: number;
   readonly #timeoutMs: number;
@@ -115,11 +116,12 @@ export class StdioScenarioSession implements TransportSession {
     const byteStart = this.#recorder.byteCounts();
     const responses: JsonValue[] = [];
     let failure: StdioRunFailure | undefined;
+    this.#unmatched.clear();
     try {
       await waitForSpawn(this.#child, this.#spawnError, this.#timeoutMs);
       for (const step of scenario.steps) {
         try {
-          const response = await executeStep(step, this.#child, this.#frames, this.#recorder);
+          const response = await executeStep(step, this.#child, this.#frames, this.#unmatched, this.#recorder);
           if (response !== undefined) {
             responses.push(response);
           }
@@ -198,6 +200,7 @@ async function executeStep(
   step: ScenarioStep,
   child: ChildProcess,
   frames: AsyncQueue<Buffer>,
+  unmatched: Map<string | number, JsonValue>,
   recorder: TraceRecorder,
 ): Promise<JsonValue | undefined> {
   switch (step.type) {
@@ -218,7 +221,7 @@ async function executeStep(
       return undefined;
     }
     case "await-response":
-      return readResponse(frames, step.id, step.timeoutMs ?? 5_000);
+      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? 5_000);
     case "transport":
       if (step.operation !== "close-stdin") {
         throw new ScenarioError(`Transport operation '${step.operation}' cannot run over stdio.`);
@@ -276,9 +279,17 @@ async function writeChunk(stream: NodeJS.WritableStream, chunk: Buffer): Promise
 
 async function readResponse(
   frames: AsyncQueue<Buffer>,
+  unmatched: Map<string | number, JsonValue>,
   expectedId: string | number | undefined,
   timeoutMs: number,
 ): Promise<JsonValue> {
+  if (expectedId !== undefined) {
+    const stashed = unmatched.get(expectedId);
+    if (stashed !== undefined) {
+      unmatched.delete(expectedId);
+      return stashed;
+    }
+  }
   const deadline = performance.now() + timeoutMs;
   while (true) {
     const remaining = deadline - performance.now();
@@ -294,6 +305,10 @@ async function readResponse(
     }
     if (expectedId === undefined || (isRecord(message) && message.id === expectedId)) {
       return message as JsonValue;
+    }
+    // JSON-RPC allows responses in any order, so keep this one for a later await-response step.
+    if (isRecord(message) && (typeof message.id === "string" || typeof message.id === "number")) {
+      unmatched.set(message.id, message as JsonValue);
     }
   }
 }

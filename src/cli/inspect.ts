@@ -1,4 +1,4 @@
-import { ScenarioError } from "../core/errors.js";
+import { ScenarioError, TargetError } from "../core/errors.js";
 import type { JsonValue, Scenario, SpecRevision } from "../core/types.js";
 import { specProfiles } from "../spec/profiles.js";
 import type { InspectedSurface, InspectedTool } from "../target/surface.js";
@@ -54,6 +54,13 @@ export async function inspectServer(
     ...target,
     scenario,
   });
+  const rejection = responses.find((response) => isRecord(response) && isRecord(response.error));
+  if (rejection !== undefined && isRecord(rejection) && isRecord(rejection.error)) {
+    const { code, message } = rejection.error;
+    throw new TargetError(
+      `Target rejected inspection for spec revision ${specRevision}: error ${String(code)} ${typeof message === "string" ? message : ""}`.trimEnd(),
+    );
+  }
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {
     throw new ScenarioError("Target did not return all expected responses during inspection.");
   }

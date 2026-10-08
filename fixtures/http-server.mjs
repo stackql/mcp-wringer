@@ -105,6 +105,14 @@ const server = http.createServer((request, response) => {
       });
       return;
     }
+    if (revision === "2026-07-28" && "id" in message && !headersMatchBody(request.headers, message)) {
+      response.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: message.id ?? null,
+        error: { code: -32020, message: "Header mismatch" },
+      }));
+      return;
+    }
     if (revision === "2025-11-25" && initialized && message.method !== "initialize"
       && request.headers["mcp-session-id"] !== sessionId) {
       response.writeHead(404).end();
@@ -262,4 +270,23 @@ function sendResponse(response, request, result, headers = {}) {
 function send(response, message) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(message));
+}
+
+function headersMatchBody(headers, message) {
+  if (headers["mcp-method"] !== message.method) {
+    return false;
+  }
+  const field = { "tools/call": "name", "prompts/get": "name", "resources/read": "uri" }[message.method];
+  const expected = field === undefined ? undefined : message.params?.[field];
+  if (typeof expected !== "string") {
+    return true;
+  }
+  return decodeHeaderValue(headers["mcp-name"]) === expected;
+}
+
+function decodeHeaderValue(value) {
+  if (typeof value === "string" && value.startsWith("=?base64?") && value.endsWith("?=")) {
+    return Buffer.from(value.slice(9, -2), "base64").toString("utf8");
+  }
+  return value;
 }

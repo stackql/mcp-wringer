@@ -139,9 +139,15 @@ function createOracles(): Array<[string, Oracle]> {
           const id = readId(message.id);
           const key = id === undefined ? undefined : idKey(id);
           const request = key === undefined ? undefined : requestById.get(key);
+          // JSON-RPC 2.0 section 5 requires a null id on an error response when the request id could not be determined.
+          const nullIdError = isNullIdError(message);
           let violation: string | undefined;
-          if (line.error !== undefined || message.jsonrpc !== "2.0" || id === undefined || key === undefined
+          if (line.error !== undefined || message.jsonrpc !== "2.0"
             || ("result" in message && "error" in message)) {
+            violation = "invalid-response";
+          } else if (nullIdError) {
+            violation = undefined;
+          } else if (id === undefined || key === undefined) {
             violation = "invalid-response";
           } else if (request === undefined) {
             violation = "unmatched-response-id";
@@ -169,6 +175,11 @@ function createOracles(): Array<[string, Oracle]> {
         const findings: FindingDraft[] = [];
         for (const line of parseResponseMessages(context)) {
           if (line.error !== undefined || !isJsonRpcMessage(line.value)) {
+            continue;
+          }
+          // The MCP schema models an unreadable request id by omitting it, while JSON-RPC 2.0 uses null.
+          // The MCP text allows either reading for malformed requests, so a null-id error is not judged here.
+          if (isRecord(line.value) && isNullIdError(line.value)) {
             continue;
           }
           const messageValidation = validateAgainstSchema(context.rules.revision, "JSONRPCMessage", line.value);
@@ -538,7 +549,15 @@ function isJsonRpcMessage(value: unknown): boolean {
   if (typeof value.method === "string") {
     return value.id === undefined || readId(value.id) !== undefined;
   }
+  if (isNullIdError(value)) {
+    return true;
+  }
   return readId(value.id) !== undefined && (("result" in value) !== ("error" in value));
+}
+
+// JSON-RPC 2.0 section 5 uses a null id for an error response when the request id could not be read.
+function isNullIdError(value: Record<string, unknown>): boolean {
+  return value.id === null && "error" in value && !("result" in value);
 }
 
 function readId(value: unknown): string | number | undefined {

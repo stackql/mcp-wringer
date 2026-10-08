@@ -241,6 +241,7 @@ export class HttpScenarioSession implements TransportSession {
     }
     const fault = wire?.fault;
     const headers = createRequestHeaders(this.#options.url, scenario.specRevision, this.#sessionId);
+    addMirroredHeaders(headers, scenario.specRevision, message, body);
     const method = fault === "wrong-method" ? "PUT" : "POST";
     applyHeaderFault(headers, fault, scenario.specRevision);
     if (fault === "truncated-body" || fault === "abort-response") {
@@ -336,23 +337,23 @@ export class HttpScenarioSession implements TransportSession {
   }
 
   #queueMessages(body: string, headers: Record<string, string | string[]>, statusCode: number): void {
-    if (statusCode < 200 || statusCode >= 300) {
-      return;
-    }
+    const success = statusCode >= 200 && statusCode < 300;
     const contentType = headerValue(headers, "content-type")?.split(";", 1)[0]?.trim().toLowerCase();
     if (body.length === 0) {
       return;
     }
     const messages: JsonValue[] = [];
-    if (contentType === "text/event-stream") {
+    if (contentType === "text/event-stream" && success) {
       for (const data of parseSseData(body)) {
         parseJsonMessages(data, messages);
       }
-    } else if (contentType === "application/json" || contentType === undefined) {
+    } else if (contentType === "application/json" || (contentType === undefined && success)) {
       parseJsonMessages(body, messages);
     }
-    this.#pendingResponses.push(...messages);
-    this.#observedResponses.push(...messages);
+    // Servers reject requests with an HTTP error status and a JSON-RPC error body, for example an unsupported protocol version.
+    const accepted = success ? messages : messages.filter((message) => isRecord(message) && isRecord(message.error));
+    this.#pendingResponses.push(...accepted);
+    this.#observedResponses.push(...accepted);
   }
 
   #takeResponse(id: string | number | undefined): void {
@@ -399,6 +400,52 @@ function createRequestHeaders(url: string, revision: Scenario["specRevision"], s
     headers["MCP-Session-Id"] = sessionId;
   }
   return headers;
+}
+
+const NAME_HEADER_METHODS: Readonly<Record<string, "name" | "uri">> = {
+  "tools/call": "name",
+  "prompts/get": "name",
+  "resources/read": "uri",
+};
+
+// Streamable HTTP 2026-07-28 "Standard Request Headers": mirror method and params.name or params.uri.
+function addMirroredHeaders(
+  headers: Record<string, string>,
+  revision: Scenario["specRevision"],
+  message: JsonValue | undefined,
+  body: Buffer,
+): void {
+  if (scenarioIsLegacy(revision)) {
+    return;
+  }
+  let value: unknown = message;
+  if (value === undefined) {
+    try {
+      value = JSON.parse(body.toString("utf8")) as unknown;
+    } catch {
+      return;
+    }
+  }
+  if (!isRecord(value) || typeof value.method !== "string") {
+    return;
+  }
+  if (isPlainHeaderValue(value.method)) {
+    headers["Mcp-Method"] = value.method;
+  }
+  const nameField = NAME_HEADER_METHODS[value.method];
+  const params = value.params;
+  if (nameField !== undefined && isRecord(params) && typeof params[nameField] === "string") {
+    headers["Mcp-Name"] = encodeHeaderValue(params[nameField]);
+  }
+}
+
+function isPlainHeaderValue(value: string): boolean {
+  return /^[\x21-\x7E](?:[\x20-\x7E\t]*[\x21-\x7E])?$/u.test(value)
+    && !(value.startsWith("=?base64?") && value.endsWith("?="));
+}
+
+function encodeHeaderValue(value: string): string {
+  return isPlainHeaderValue(value) ? value : `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
 function applyHeaderFault(

@@ -8,6 +8,8 @@ export interface GeneratorContext {
   caseIndex: number;
   transport?: TransportName;
   argumentStrategies?: readonly ArgumentStrategySelection[];
+  /** Exact tool names the safety policy permits in addition to tools annotated read-only. */
+  allowTools?: readonly string[];
 }
 
 export interface ScenarioGenerator {

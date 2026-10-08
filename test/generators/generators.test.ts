@@ -33,6 +33,71 @@ describe.each(["2025-11-25", "2026-07-28"] as const)("scenario generators for %s
     }
   });
 
+  it("rotates tool calls across read-only and explicitly allowed tools only", () => {
+    const surface: InspectedSurface = {
+      specRevision: revision,
+      tools: [
+        { name: "zeta-read", safety: "read-only", inputSchema: { type: "object" } },
+        { name: "alpha-read", safety: "read-only", inputSchema: { type: "object" } },
+        { name: "beta-read", safety: "read-only", inputSchema: { type: "object" } },
+        { name: "allowed-write", safety: "requires-explicit-allow", inputSchema: { type: "object" } },
+        { name: "unallowed-write", safety: "requires-explicit-allow", inputSchema: { type: "object" } },
+        { name: "drop-everything", safety: "requires-exact-name-allow", inputSchema: { type: "object" } },
+      ],
+      resources: [],
+      prompts: [],
+    };
+    const allowTools = ["allowed-write"];
+    const scenarios = generateScenarios(revision, surface, 71, 64, ["tool-args"], "stdio", undefined, 0, allowTools);
+    const called = new Set<string>();
+    for (const scenario of scenarios) {
+      assertScenarioSafety(scenario, surface, { allowTools });
+      for (const step of scenario.steps) {
+        if (step.type === "send" && isRecord(step.message) && step.message.method === "tools/call") {
+          const params = step.message.params;
+          called.add(String(isRecord(params) ? params.name : ""));
+        }
+      }
+    }
+    expect([...called].sort()).toEqual(["allowed-write", "alpha-read", "beta-read", "zeta-read"]);
+    expect(generateScenarios(revision, surface, 71, 64, ["tool-args"], "stdio", undefined, 0, allowTools))
+      .toEqual(scenarios);
+    const withoutAllow = generateScenarios(revision, surface, 71, 64, ["tool-args"]);
+    for (const scenario of withoutAllow) {
+      assertScenarioSafety(scenario, surface);
+    }
+  });
+
+  it("rotates resource reads and prompt requests across the discovered surface", () => {
+    const surface: InspectedSurface = {
+      specRevision: revision,
+      tools: [],
+      resources: [
+        { name: "b", uri: "test://b" },
+        { name: "a", uri: "test://a" },
+        { name: "c", uri: "test://c" },
+      ],
+      prompts: [{ name: "second" }, { name: "first" }],
+    };
+    const uris = new Set<string>();
+    const promptNames = new Set<string>();
+    for (const scenario of generateScenarios(revision, surface, 33, 48, ["resources", "prompts"])) {
+      for (const step of scenario.steps) {
+        if (step.type !== "send" || !isRecord(step.message) || !isRecord(step.message.params)) {
+          continue;
+        }
+        if (step.message.method === "resources/read") {
+          uris.add(String(step.message.params.uri));
+        }
+        if (step.message.method === "prompts/get") {
+          promptNames.add(String(step.message.params.name));
+        }
+      }
+    }
+    expect([...uris].sort()).toEqual(["test://a", "test://b", "test://c"]);
+    expect([...promptNames].sort()).toEqual(["first", "second"]);
+  });
+
   it("generates arguments from the advertised JSON Schema", async () => {
     const surface = await inspectFixture(revision);
     const tool = surface.tools.find((candidate) => candidate.name === "search");
