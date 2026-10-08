@@ -106,6 +106,42 @@ describe.each(["2025-11-25", "2026-07-28"] as const)("stdio trace privacy for %s
     expect(JSON.stringify(trace)).not.toContain("do-not-record-this-value");
     expect(trace.events.filter((event) => event.channel === "stderr").length).toBeGreaterThan(0);
   });
+
+});
+
+describe("inherited environment trace privacy", () => {
+  it("redacts values inherited from the caller environment", async () => {
+    const previousSecret = process.env.FIXTURE_EMIT_SECRET;
+    const previousSplit = process.env.FIXTURE_EMIT_SECRET_SPLIT;
+    process.env.FIXTURE_EMIT_SECRET = "inherited-secret-value";
+    process.env.FIXTURE_EMIT_SECRET_SPLIT = "yes";
+    try {
+      const scenario: Scenario = {
+        formatVersion: 1,
+        id: "inherited-redaction-2025-11-25",
+        specRevision: "2025-11-25",
+        steps: [],
+      };
+      const { trace } = await runStdioScenario({
+        command: process.execPath,
+        args: [fixturePath, "--revision", "2025-11-25"],
+        inheritEnvironment: true,
+        scenario,
+      });
+      expect(JSON.stringify(trace)).not.toContain("inherited-secret-value");
+    } finally {
+      if (previousSecret === undefined) {
+        delete process.env.FIXTURE_EMIT_SECRET;
+      } else {
+        process.env.FIXTURE_EMIT_SECRET = previousSecret;
+      }
+      if (previousSplit === undefined) {
+        delete process.env.FIXTURE_EMIT_SECRET_SPLIT;
+      } else {
+        process.env.FIXTURE_EMIT_SECRET_SPLIT = previousSplit;
+      }
+    }
+  });
 });
 
 describe("inspect command surface", () => {
@@ -114,8 +150,20 @@ describe("inspect command surface", () => {
     async (revision: SpecRevision) => {
       const surface = await inspectServer(revision, process.execPath, [fixturePath, "--revision", revision]);
       expect(surface.tools).toEqual([
-        { name: "search", safety: "read-only" },
-        { name: "delete-record", safety: "requires-exact-name-allow" },
+        {
+          name: "search",
+          safety: "read-only",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+        {
+          name: "delete-record",
+          safety: "requires-exact-name-allow",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+        },
       ]);
       expect(surface.resources).toEqual([{ name: "Welcome", uri: "fixture://welcome" }]);
       expect(surface.prompts).toEqual([{ name: "summarize" }]);

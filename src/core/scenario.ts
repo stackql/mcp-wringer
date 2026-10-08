@@ -25,7 +25,11 @@ export function validateReproducer(value: unknown): asserts value is Reproducer 
   if (!isRecord(value) || value.formatVersion !== 1 || !isSpecRevision(value.specRevision)) {
     throw new ScenarioError("Reproducer must have formatVersion 1 and a supported specRevision.");
   }
-  assertOnlyKeys(value, ["formatVersion", "specRevision", "target", "scenario"], "Reproducer");
+  assertOnlyKeys(value, ["formatVersion", "specRevision", "seed", "target", "scenario"], "Reproducer");
+  if (value.seed !== undefined
+    && (typeof value.seed !== "number" || !Number.isInteger(value.seed) || value.seed < 0 || value.seed > 0xffff_ffff)) {
+    throw new ScenarioError("Reproducer seed must be an unsigned 32-bit integer when present.");
+  }
   if (!isRecord(value.target) || typeof value.target.command !== "string" || value.target.command.length === 0
     || !Array.isArray(value.target.args)
     || !value.target.args.every((arg) => typeof arg === "string")

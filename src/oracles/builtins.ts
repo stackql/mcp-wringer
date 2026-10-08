@@ -36,6 +36,7 @@ function createOracles(): Array<[string, Oracle]> {
           "crash.process-exit",
           "target-exited",
           "The target process exited unexpectedly while executing the scenario.",
+          stableTraceEvidence(context, true),
         )];
       },
     }],
@@ -90,7 +91,6 @@ function createOracles(): Array<[string, Oracle]> {
           "liveness.probe-failed",
           "probe-failed",
           "The target failed its revision-specific liveness probe after the scenario.",
-          context.livenessProbe.evidence,
         )];
       },
     }],
@@ -306,13 +306,39 @@ function draft(
   message: string,
   evidence?: TraceEvent[],
 ): FindingDraft {
-  const selectedEvidence = evidence ?? context.trace.events.slice(-6);
+  const selectedEvidence = evidence ?? stableTraceEvidence(context);
   return {
     ruleId,
     signature,
     message,
     ...(selectedEvidence.length === 0 ? {} : { evidence: selectedEvidence }),
   };
+}
+
+function stableTraceEvidence(context: OracleContext, includeProcess = false): TraceEvent[] {
+  const evidence: TraceEvent[] = [];
+  for (const channel of ["stdin", "stdout", "stderr"] as const) {
+    const channelEvents = context.trace.events.filter((event) => event.channel === channel);
+    if (channelEvents.length === 0) {
+      continue;
+    }
+    const bytes = Buffer.concat(channelEvents.map((event) =>
+      event.encoding === "base64" ? Buffer.from(event.data, "base64") : Buffer.from(event.data)));
+    const text = bytes.toString("utf8");
+    const isUtf8 = Buffer.from(text, "utf8").equals(bytes);
+    evidence.push({
+      offsetMs: 0,
+      channel,
+      encoding: isUtf8 ? "utf8" : "base64",
+      data: isUtf8 ? text : bytes.toString("base64"),
+    });
+  }
+  if (includeProcess) {
+    evidence.push(...context.trace.events
+      .filter((event) => event.channel === "process")
+      .map((event) => ({ ...event, offsetMs: 0 })));
+  }
+  return evidence;
 }
 
 function parseStdout(trace: OracleContext["trace"]): ParsedLine[] {
@@ -350,13 +376,18 @@ function sentRequests(scenario: Scenario): SentRequest[] {
       }
     } else if (step.type === "send-raw") {
       const bytes = Buffer.from(step.bytesBase64, "base64");
-      try {
-        const message = asRecord(JSON.parse(bytes.toString("utf8")) as unknown);
-        if (message !== undefined) {
-          requests.push(toSentRequest(message));
+      for (const frame of bytes.toString("utf8").split("\n")) {
+        if (frame.trim().length === 0) {
+          continue;
         }
-      } catch {
-        continue;
+        try {
+          const message = asRecord(JSON.parse(frame) as unknown);
+          if (message !== undefined) {
+            requests.push(toSentRequest(message));
+          }
+        } catch {
+          continue;
+        }
       }
     }
   }

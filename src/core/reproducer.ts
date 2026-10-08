@@ -22,11 +22,13 @@ export async function saveReproducer(path: string, reproducer: Reproducer): Prom
 export function createReproducer(
   scenario: Scenario,
   target: Omit<TargetDescriptor, "environmentNames"> & { environmentNames?: string[] },
+  seed?: number,
 ): Reproducer {
   const environmentNames = [...new Set(target.environmentNames ?? [])].sort();
   return {
     formatVersion: 1,
     specRevision: scenario.specRevision,
+    ...(seed === undefined ? {} : { seed }),
     target: {
       command: target.command,
       args: [...target.args],

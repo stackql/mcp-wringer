@@ -8,6 +8,7 @@
   "properties": {
     "formatVersion": { "const": 1 },
     "specRevision": { "enum": ["2025-11-25", "2026-07-28"] },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
     "target": { "$ref": "#/$defs/target" },
     "scenario": { "$ref": "#/$defs/scenario" }
   },

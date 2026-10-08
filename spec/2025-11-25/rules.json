@@ -10,6 +10,7 @@
   "responseSchemas": {
     "initialize": "InitializeResult",
     "ping": "EmptyResult",
+    "tools/call": "CallToolResult",
     "tools/list": "ListToolsResult",
     "resources/list": "ListResourcesResult",
     "prompts/list": "ListPromptsResult"

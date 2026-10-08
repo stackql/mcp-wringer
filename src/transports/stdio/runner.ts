@@ -30,112 +30,158 @@ export interface StdioRunOutcome {
   stderrBytes: number;
 }
 
-export async function runStdioScenario(options: StdioRunOptions): Promise<StdioRunResult> {
-  const child = spawnTarget(options);
-  const startedAt = performance.now();
-  const recorder = new TraceRecorder(options.scenario.id, options.scenario.specRevision, startedAt, Object.values(options.env ?? {}));
-  const frames = new AsyncQueue<Buffer>();
-  let outputBuffer = Buffer.alloc(0);
-  let spawnError: Error | undefined;
-  let closed = false;
-  let exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let failure: StdioRunFailure | undefined;
-  const responses: JsonValue[] = [];
+export class StdioScenarioSession {
+  readonly #child: ChildProcess;
+  readonly #frames = new AsyncQueue<Buffer>();
+  readonly #recorder: TraceRecorder;
+  readonly #startedAt: number;
+  readonly #timeoutMs: number;
+  readonly #exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  #outputBuffer = Buffer.alloc(0);
+  #spawnError: Error | undefined;
+  #exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  #closeFailure: StdioRunFailure | undefined;
+  #closed = false;
 
-  const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once("exit", (code, signal) => {
-      exitStatus = { code, signal };
-      recorder.add("process", Buffer.from(`exit code=${String(code)} signal=${String(signal)}`));
-      resolve(exitStatus);
+  constructor(options: StdioRunOptions) {
+    this.#child = spawnTarget(options);
+    this.#startedAt = performance.now();
+    this.#timeoutMs = options.timeoutMs ?? 5_000;
+    this.#recorder = new TraceRecorder(
+      options.scenario.id,
+      options.scenario.specRevision,
+      this.#startedAt,
+      [
+        ...Object.values(options.env ?? {}),
+        ...(options.inheritEnvironment ? Object.values(process.env).filter((value): value is string => value !== undefined) : []),
+      ],
+    );
+    this.#exitPromise = new Promise((resolve) => {
+      this.#child.once("exit", (code, signal) => {
+        this.#exitStatus = { code, signal };
+        this.#recorder.add("process", Buffer.from(`exit code=${String(code)} signal=${String(signal)}`));
+        resolve(this.#exitStatus);
+      });
     });
-  });
-
-  child.once("error", (error) => {
-    spawnError = error;
-    recorder.add("process", Buffer.from(`spawn error=${error.message}`));
-    frames.close(error);
-  });
-  child.stdin?.on("error", (error) => {
-    spawnError = error;
-    recorder.add("process", Buffer.from(`stdin error=${error.message}`));
-    frames.close(new TransportError(`Target stdin failed: ${error.message}`, { cause: error }));
-  });
-  child.stdout?.on("data", (chunk: Buffer) => {
-    recorder.add("stdout", chunk);
-    outputBuffer = Buffer.concat([outputBuffer, chunk]);
-    let newline = outputBuffer.indexOf(0x0a);
-    while (newline >= 0) {
-      frames.push(outputBuffer.subarray(0, newline + 1));
-      outputBuffer = outputBuffer.subarray(newline + 1);
-      newline = outputBuffer.indexOf(0x0a);
-    }
-  });
-  child.stdout?.on("error", (error) => {
-    recorder.add("process", Buffer.from(`stdout error=${error.message}`));
-    frames.close(new TransportError(`Target stdout failed: ${error.message}`, { cause: error }));
-  });
-  child.stderr?.on("data", (chunk: Buffer) => recorder.add("stderr", chunk));
-  child.stderr?.on("error", (error) => recorder.add("process", Buffer.from(`stderr error=${error.message}`)));
-  child.once("close", () => {
-    if (outputBuffer.length > 0) {
-      frames.push(outputBuffer);
-    }
-    if (!closed) {
-      frames.close(spawnError);
-    }
-  });
-
-  try {
-    await waitForSpawn(child, spawnError, options.timeoutMs ?? 5_000);
-    for (const step of options.scenario.steps) {
-      try {
-        const response = await executeStep(step, child, frames, recorder);
-        if (response !== undefined) {
-          responses.push(response);
-        }
-      } catch (error) {
-        if (!(error instanceof TransportError)) {
-          throw error;
-        }
-        failure = classifyFailure(error, exitStatus);
-        break;
+    this.#child.once("error", (error) => {
+      this.#spawnError = error;
+      this.#recorder.add("process", Buffer.from(`spawn error=${error.message}`));
+      this.#frames.close(error);
+    });
+    this.#child.stdin?.on("error", (error) => {
+      this.#spawnError = error;
+      this.#recorder.add("process", Buffer.from(`stdin error=${error.message}`));
+      this.#frames.close(new TransportError(`Target stdin failed: ${error.message}`, { cause: error }));
+    });
+    this.#child.stdout?.on("data", (chunk: Buffer) => {
+      this.#recorder.add("stdout", chunk);
+      this.#outputBuffer = Buffer.concat([this.#outputBuffer, chunk]);
+      let newline = this.#outputBuffer.indexOf(0x0a);
+      while (newline >= 0) {
+        this.#frames.push(this.#outputBuffer.subarray(0, newline + 1));
+        this.#outputBuffer = this.#outputBuffer.subarray(newline + 1);
+        newline = this.#outputBuffer.indexOf(0x0a);
       }
+    });
+    this.#child.stdout?.on("error", (error) => {
+      this.#recorder.add("process", Buffer.from(`stdout error=${error.message}`));
+      this.#frames.close(new TransportError(`Target stdout failed: ${error.message}`, { cause: error }));
+    });
+    this.#child.stderr?.on("data", (chunk: Buffer) => this.#recorder.add("stderr", chunk));
+    this.#child.stderr?.on("error", (error) =>
+      this.#recorder.add("process", Buffer.from(`stderr error=${error.message}`)));
+    this.#child.once("close", () => {
+      if (this.#outputBuffer.length > 0) {
+        this.#frames.push(this.#outputBuffer);
+      }
+      if (!this.#closed) {
+        this.#frames.close(this.#spawnError);
+      }
+    });
+  }
+
+  async execute(
+    scenario: Scenario,
+    options: { closeAfterScenario?: boolean } = {},
+  ): Promise<StdioRunResult> {
+    if (this.#closed) {
+      throw new TargetError("Cannot execute a scenario after the stdio target session is closed.");
     }
-    if (failure === undefined) {
-      if (!child.stdin?.destroyed) {
-        child.stdin?.end();
+    if (scenario.specRevision !== this.#recorder.getRevision()) {
+      throw new ScenarioError("All scenarios in a stdio target session must use the same spec revision.");
+    }
+    const startedAt = performance.now();
+    const eventStart = this.#recorder.eventCount();
+    const byteStart = this.#recorder.byteCounts();
+    const responses: JsonValue[] = [];
+    let failure: StdioRunFailure | undefined;
+    try {
+      await waitForSpawn(this.#child, this.#spawnError, this.#timeoutMs);
+      for (const step of scenario.steps) {
+        try {
+          const response = await executeStep(step, this.#child, this.#frames, this.#recorder);
+          if (response !== undefined) {
+            responses.push(response);
+          }
+        } catch (error) {
+          if (!(error instanceof TransportError)) {
+            throw error;
+          }
+          failure = classifyFailure(error, this.#exitStatus);
+          break;
+        }
+      }
+      if (options.closeAfterScenario ?? true) {
+        await this.close(failure !== undefined);
+      }
+    } catch (error) {
+      await this.close(true);
+      throw error;
+    }
+    const byteCounts = this.#recorder.byteCounts();
+    const finalFailure = failure ?? this.#closeFailure;
+    return {
+      trace: this.#recorder.toTrace(scenario.id, eventStart),
+      responses,
+      outcome: {
+        ...(finalFailure === undefined ? {} : { failure: finalFailure }),
+        exitCode: this.#exitStatus?.code ?? null,
+        signal: this.#exitStatus?.signal ?? null,
+        durationMs: Math.max(0, performance.now() - startedAt),
+        stdoutBytes: byteCounts.stdoutBytes - byteStart.stdoutBytes,
+        stderrBytes: byteCounts.stderrBytes - byteStart.stderrBytes,
+      },
+    };
+  }
+
+  async close(terminate = false): Promise<void> {
+    if (this.#closed) {
+      return;
+    }
+    if (terminate) {
+      await terminateTarget(this.#child);
+    } else {
+      if (!this.#child.stdin?.destroyed) {
+        this.#child.stdin?.end();
       }
       try {
-        await waitForExit(exitPromise, options.timeoutMs ?? 5_000);
+        await waitForExit(this.#exitPromise, this.#timeoutMs);
       } catch (error) {
         if (!(error instanceof TargetError)) {
           throw error;
         }
-        failure = { kind: "timeout", phase: "shutdown", message: error.message };
+        this.#closeFailure = { kind: "timeout", phase: "shutdown", message: error.message };
+        await terminateTarget(this.#child);
       }
     }
-    if (failure !== undefined) {
-      await terminateTarget(child);
-    }
-  } catch (error) {
-    await terminateTarget(child);
-    throw error;
-  } finally {
-    closed = true;
-    recorder.flush();
+    this.#recorder.flush();
+    this.#closed = true;
   }
+}
 
-  return {
-    trace: recorder.toTrace(),
-    responses,
-    outcome: {
-      ...(failure === undefined ? {} : { failure }),
-      exitCode: exitStatus?.code ?? null,
-      signal: exitStatus?.signal ?? null,
-      durationMs: Math.max(0, performance.now() - startedAt),
-      ...recorder.byteCounts(),
-    },
-  };
+export async function runStdioScenario(options: StdioRunOptions): Promise<StdioRunResult> {
+  const session = new StdioScenarioSession(options);
+  return session.execute(options.scenario);
 }
 
 async function executeStep(
@@ -383,12 +429,20 @@ class TraceRecorder {
     }
   }
 
-  toTrace(): Trace {
+  getRevision(): Scenario["specRevision"] {
+    return this.#revision;
+  }
+
+  eventCount(): number {
+    return this.#events.length;
+  }
+
+  toTrace(scenarioId = this.#scenarioId, fromIndex = 0): Trace {
     return {
       formatVersion: 1,
-      scenarioId: this.#scenarioId,
+      scenarioId,
       specRevision: this.#revision,
-      events: this.#events.map((event) => ({
+      events: this.#events.slice(fromIndex).map((event) => ({
         offsetMs: event.offsetMs,
         channel: event.channel,
         encoding: event.encoding,

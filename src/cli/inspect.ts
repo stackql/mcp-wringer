@@ -1,24 +1,16 @@
 import { ScenarioError } from "../core/errors.js";
 import type { JsonValue, Scenario, SpecRevision } from "../core/types.js";
 import { specProfiles } from "../spec/profiles.js";
+import type { InspectedSurface, InspectedTool } from "../target/surface.js";
 import { transportRegistry } from "../transports/registry.js";
 
-export interface InspectedTool {
-  name: string;
-  safety: "read-only" | "requires-explicit-allow" | "requires-exact-name-allow";
-}
-
-export interface InspectedSurface {
-  specRevision: SpecRevision;
-  tools: InspectedTool[];
-  resources: Array<{ name: string; uri: string }>;
-  prompts: Array<{ name: string }>;
-}
+export type { InspectedSurface, InspectedTool } from "../target/surface.js";
 
 export async function inspectServer(
   specRevision: SpecRevision,
   command: string,
   args: string[],
+  options: { env?: Record<string, string>; inheritEnvironment?: boolean; timeoutMs?: number } = {},
 ): Promise<InspectedSurface> {
   const profile = specProfiles.get(specRevision);
   const methods = [
@@ -42,7 +34,14 @@ export async function inspectServer(
     description: "Read-only MCP surface inspection.",
     steps,
   };
-  const { responses } = await transportRegistry.get("stdio")({ command, args, scenario });
+  const { responses } = await transportRegistry.get("stdio")({
+    command,
+    args,
+    scenario,
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {
     throw new ScenarioError("Target did not return all expected responses during inspection.");
   }
@@ -57,7 +56,12 @@ export async function inspectServer(
       : annotations.readOnlyHint === true
         ? "read-only"
         : "requires-explicit-allow";
-    return [{ name: item.name, safety }];
+    const inputSchema = item.inputSchema;
+    return [{
+      name: item.name,
+      safety,
+      ...(inputSchema === undefined ? {} : { inputSchema }),
+    }];
   });
   const resources = getArray(listResponses[1], "resources").flatMap((item) => {
     if (!isRecord(item) || typeof item.name !== "string" || typeof item.uri !== "string") {

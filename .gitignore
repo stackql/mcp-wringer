@@ -150,3 +150,6 @@ vite.config.ts.timestamp-*
 
 # Generated Action bundle (commit deliberately as part of M6)
 /dist-action/
+
+# Generated fuzzer reports and response-signature corpus
+.mcp-wringer/

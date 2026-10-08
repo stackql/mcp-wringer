@@ -106,6 +106,7 @@ export interface TargetDescriptor {
 export interface Reproducer {
   formatVersion: 1;
   specRevision: SpecRevision;
+  seed?: number;
   target: TargetDescriptor;
   scenario: Scenario;
 }

@@ -174,7 +174,7 @@ function handleFrame(bytes) {
   }
 
   const method = request.method;
-  if (method === "fixture/hang" && defects.has("hang-on-request")) {
+  if ((method === "fixture/hang" || method === "tools/list") && defects.has("hang-on-request")) {
     return;
   }
   if (method === "fixture/break-liveness" && defects.has("break-liveness")) {
@@ -199,12 +199,23 @@ function handleFrame(bytes) {
     sendResponse(request, { payload: "x".repeat(1_100_000) });
     return;
   }
+  if (method === "tools/list" && defects.has("large-response")) {
+    sendResponse(request, { tools, padding: "x".repeat(1_100_000) });
+    return;
+  }
   if (method === "fixture/invalid-envelope" && defects.has("wrong-error-code")) {
     send({
       jsonrpc: "2.0",
       id: request.id,
       error: { code: -32000, message: "Invalid request." },
     });
+    return;
+  }
+  if (method === "tools/call" && request.params?.name === "search") {
+    if (defects.has("mutate-state")) {
+      stateChanged = true;
+    }
+    sendResponse(request, { content: [{ type: "text", text: "Search completed." }] });
     return;
   }
   const result = getResult(method);
@@ -223,6 +234,14 @@ function handleFrame(bytes) {
   }
   if (method === "tools/list" && defects.has("invalid-schema")) {
     sendResponse(request, { tools: "not-an-array" });
+    return;
+  }
+  if (method === "tools/list" && defects.has("break-liveness")) {
+    const response = stateChanged
+      ? { tools: tools.filter((tool) => tool.name !== "search") }
+      : { tools };
+    sendResponse(request, response);
+    livenessBroken = true;
     return;
   }
   if (method === "tools/list" && stateChanged) {
