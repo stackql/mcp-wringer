@@ -52,7 +52,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
         return {
           defect: "whole-frame-write-only",
           steps: [
-            { type: "send", message: request, wire: { transport: "stdio", chunks: [1], delayMs: 60 } },
+            { type: "send", message: request, wire: { transport: "stdio", chunks: [1, 2, 3], delayMs: 500 } },
             { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
           ],
         };
