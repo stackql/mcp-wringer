@@ -5,7 +5,7 @@ import type { JsonValue, Scenario, ScenarioStep } from "../core/types.js";
 import { specProfiles } from "../spec/profiles.js";
 import type { InspectedSurface } from "../target/surface.js";
 import { generateToolArguments } from "./argument-strategies.js";
-import type { GeneratorContext, ScenarioGenerator } from "./types.js";
+import type { ArgumentStrategySelection, GeneratorContext, ScenarioGenerator } from "./types.js";
 
 export const generatorNames = [
   "schema-valid",
@@ -36,6 +36,7 @@ export function generateScenarios(
   count: number,
   names: readonly string[] = generatorNames,
   transport: GeneratorContext["transport"] = "stdio",
+  argumentStrategies?: readonly ArgumentStrategySelection[],
 ): Scenario[] {
   const available = new Set(generatorRegistry.names());
   const selected = names.filter((name) => available.has(name));
@@ -54,6 +55,7 @@ export function generateScenarios(
       surface,
       caseIndex,
       transport,
+      ...(argumentStrategies === undefined ? {} : { argumentStrategies }),
     };
     scenarios.push(generatorRegistry.get(name).generate(context));
   }
@@ -142,7 +144,7 @@ function toolCallSteps(context: GeneratorContext, id: string): ScenarioStep[] {
   if (tool === undefined) {
     return requestSteps(specProfiles.get(context.revision), "tools/list", `${id}-tools`);
   }
-  const argumentsValue = generateToolArguments(tool.name, tool.inputSchema, context.seed);
+  const argumentsValue = generateToolArguments(tool.name, tool.inputSchema, context.seed, context.argumentStrategies);
   const profile = specProfiles.get(context.revision);
   return requestSteps(profile, "tools/call", `${id}-call`, { name: tool.name, arguments: argumentsValue });
 }

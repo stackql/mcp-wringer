@@ -23,6 +23,8 @@ The built-in profiles are `quick` (18 cases), `standard` (256 cases), and `deep`
 
 The target receives a minimal environment by default. Pass individual variables with repeated `--env NAME=VALUE` options; `--inherit-env` opts into passing the caller's environment. Tool calls are limited to tools advertising `readOnlyHint: true`. Use `--allow-tool NAME` to explicitly permit a tool without that annotation. Destructive tools require an exact-name allow entry.
 
+Use `mcp-wringer init` to create a starter config, `mcp-wringer list` to view registered components, and `mcp-wringer run --show-config` to inspect resolved values and their origins. Configuration can set plugin modules, generator weights, enabled oracles and reporters, and a finding baseline. See the [quick start](./docs/quick-start.md), [configuration reference](./docs/config-reference.md), [oracle and report catalogue](./docs/oracles.md), [reproducer format](./docs/reproducers.md), [plugin guide](./docs/plugins.md), and [safety notes](./docs/safety.md).
+
 Replay a report reproducer with the same target environment when needed:
 
 ```sh

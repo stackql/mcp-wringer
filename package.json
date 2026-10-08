@@ -26,16 +26,20 @@
     "dist-action/",
     "spec/",
     "README.md",
+    "config.schema.json",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsup --config tsup.config.ts",
     "build:action": "tsup --config tsup.action.config.ts",
     "check": "npm run lint && npm run typecheck && npm test",
+    "check:plugin-api": "node scripts/check-plugin-api.mjs",
     "docs:config": "node ./scripts/docs-config.mjs",
+    "docs:config:check": "npm run docs:config && git diff --exit-code -- docs/config-reference.md config.schema.json",
     "lint": "eslint .",
     "spec:sync": "node ./scripts/spec-sync.mjs",
     "test": "vitest run",
+    "test:example-plugin": "node scripts/test-example-plugin.mjs",
     "test:matrix": "vitest run --config vitest.matrix.config.ts",
     "typecheck": "tsc --noEmit"
   },

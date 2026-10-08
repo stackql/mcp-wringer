@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { Ajv2020, type AnySchemaObject } from "ajv/dist/2020.js";
 import { renderReport, reporterRegistry } from "../../src/reporters/index.js";
 import { evaluateOracles } from "../../src/oracles/index.js";
 import { executeFixture, requestSteps } from "./helpers.js";
@@ -30,6 +32,41 @@ describe("oracle finding reports", () => {
       findings: [{ ruleId: "jsonrpc-contract.invalid-message", cite: expect.any(String) }],
     });
     expect(renderReport("console", findings)).toContain("MEDIUM jsonrpc-contract.invalid-message");
-    expect(reporterRegistry.names()).toEqual(["console", "json"]);
+    expect(reporterRegistry.names()).toEqual(["console", "json", "junit", "markdown", "sarif"]);
+  });
+
+  it("renders SARIF 2.1.0 accepted by the official schema", async () => {
+    const context = await executeFixture("2025-11-25", requestSteps("2025-11-25", "tools/list", "sarif"), {
+      defect: "wrong-response-id",
+    });
+    const findings = evaluateOracles(context);
+    const schemaText = await readFile(new URL("../schemas/sarif-schema-2.1.0.json", import.meta.url), "utf8");
+    const schema = JSON.parse(schemaText) as AnySchemaObject & { id?: string };
+    const schemaId = schema.id;
+    if (schemaId === undefined) {
+      throw new Error("The vendored SARIF schema has no ID.");
+    }
+    delete schema.id;
+    schema.$id = schemaId;
+    schema.$schema = "https://json-schema.org/draft/2020-12/schema";
+    const validate = new Ajv2020({ allErrors: true, strict: false }).compile(schema);
+
+    expect(validate(JSON.parse(renderReport("sarif", findings)) as unknown)).toBe(true);
+    expect(reporterRegistry.get("junit").render(findings)).toContain("<testsuites");
+    expect(reporterRegistry.get("markdown").render(findings)).toContain("| Severity | Rule |");
+    expect(reporterRegistry.names()).toEqual(["console", "json", "junit", "markdown", "sarif"]);
+  });
+
+  it("honors oracle selection and rule severity overrides", async () => {
+    const context = await executeFixture("2025-11-25", requestSteps("2025-11-25", "tools/list", "override"), {
+      defect: "wrong-response-id",
+    });
+    const selected = evaluateOracles(context, [{
+      name: "jsonrpc-contract",
+      enabled: true,
+      severityOverrides: { "jsonrpc-contract.invalid-message": "low" },
+    }]);
+    expect(selected.map((finding) => finding.severity)).toEqual(["low"]);
+    expect(evaluateOracles(context, [{ name: "jsonrpc-contract", enabled: false }])).toEqual([]);
   });
 });

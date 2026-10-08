@@ -1,5 +1,6 @@
-import type { Finding } from "../core/types.js";
+import type { Finding, JsonValue } from "../core/types.js";
 
 export interface Reporter {
-  render(findings: Finding[]): string;
+  readonly fileExtension?: string;
+  render(findings: Finding[], options?: Record<string, JsonValue>): string;
 }

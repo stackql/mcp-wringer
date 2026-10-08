@@ -20,3 +20,9 @@ export interface FindingDraft {
 export interface Oracle {
   evaluate(context: OracleContext): FindingDraft[];
 }
+
+export interface OracleSelection {
+  name: string;
+  enabled: boolean;
+  severityOverrides?: Record<string, import("../core/types.js").Finding["severity"]>;
+}

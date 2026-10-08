@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { resolve } from "node:path";
 import type { Finding, JsonValue, Scenario, ScenarioStep, SpecRevision } from "./types.js";
@@ -7,7 +8,8 @@ import { assertScenarioSafety, type SafetyPolicy } from "./safety.js";
 import { recordNovelScenario } from "./corpus.js";
 import { inspectServer } from "../cli/inspect.js";
 import { generateScenarios } from "../generators/index.js";
-import { evaluateOracles, type OracleContext } from "../oracles/index.js";
+import type { ArgumentStrategySelection } from "../generators/types.js";
+import { evaluateOracles, type OracleContext, type OracleSelection } from "../oracles/index.js";
 import { deduplicateFindings } from "../oracles/findings.js";
 import { specProfiles } from "../spec/profiles.js";
 import { transportRegistry } from "../transports/registry.js";
@@ -43,6 +45,10 @@ interface FuzzRunCommonOptions {
   safety?: SafetyPolicy;
   surface?: InspectedSurface;
   corpusDirectory?: string;
+  baselinePath?: string;
+  generatorSequence?: readonly string[];
+  argumentStrategies?: readonly ArgumentStrategySelection[];
+  oracleSelections?: readonly OracleSelection[];
   timeoutMs?: number;
   confirmations?: number;
 }
@@ -79,6 +85,7 @@ export interface FuzzRunResult {
   diagnostics: string[];
   corpusEntriesAdded: number;
   reproducers: Array<{ findingId: string; scenario: Scenario }>;
+  baseline?: { newFindingIds: string[]; staleFindingIds: string[] };
 }
 
 interface ProfileDefaults {
@@ -93,6 +100,9 @@ const profiles: Record<FuzzProfile, ProfileDefaults> = {
 };
 
 export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
+  const baselineIds = options.baselinePath === undefined
+    ? undefined
+    : await readBaseline(options.baselinePath);
   const profileName = options.profile ?? "quick";
   const defaults = profiles[profileName];
   const caseLimit = options.cases ?? defaults.cases;
@@ -140,8 +150,9 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     surface,
     seed,
     caseLimit,
-    defaultGeneratorSequence,
+    options.generatorSequence ?? defaultGeneratorSequence,
     transportName,
+    options.argumentStrategies,
   );
   const deadline = startedAt + durationLimitMs;
   const caseResults: Array<{ scenario: Scenario; context: OracleContext; findings: Finding[] } | undefined> =
@@ -163,7 +174,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     const currentSession = session ?? adapter.createSession({ ...target, scenario });
     const result = await currentSession.execute(scenario, { closeAfterScenario: restartPolicy === "per-case" });
     const context = createOracleContext(scenario, result, options.revision);
-    const findings = evaluateOracles(context);
+    const findings = evaluateOracles(context, options.oracleSelections);
     caseResults[index] = { scenario, context, findings };
     if (await recordNovelScenario(corpusDirectory, scenario, result.trace, seed)) {
       corpusEntriesAdded += 1;
@@ -237,6 +248,7 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
         ...(options.inheritEnvironment === undefined ? {} : { inheritEnvironment: options.inheritEnvironment }),
         ...(options.safety === undefined ? {} : { safety: options.safety }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        ...(options.oracleSelections === undefined ? {} : { oracleSelections: options.oracleSelections }),
       });
       if (replay.findings.some((candidate) => candidate.id === finding.id)) {
         confirmationCount += 1;
@@ -251,6 +263,17 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
       );
     }
   }
+  const baseline = baselineIds === undefined
+    ? undefined
+    : compareBaseline(baselineIds, findings);
+  if (baseline !== undefined) {
+    for (const id of baseline.newFindingIds) {
+      diagnostics.push(`Finding ${id} is new relative to the configured baseline.`);
+    }
+    for (const id of baseline.staleFindingIds) {
+      diagnostics.push(`Baseline finding ${id} is stale because it did not reproduce.`);
+    }
+  }
   return {
     seed,
     profile: profileName,
@@ -260,6 +283,46 @@ export async function runFuzz(options: FuzzRunOptions): Promise<FuzzRunResult> {
     diagnostics,
     corpusEntriesAdded,
     reproducers,
+    ...(baseline === undefined ? {} : { baseline }),
+  };
+}
+
+async function readBaseline(baselinePath: string): Promise<string[]> {
+  let text: string;
+  try {
+    text = await readFile(resolve(baselinePath), "utf8");
+  } catch (error) {
+    throw new ScenarioError(
+      `Could not read baseline '${baselinePath}': ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new ScenarioError(
+      `Baseline '${baselinePath}' is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!isRecord(value) || value.formatVersion !== 1 || !Array.isArray(value.findingIds)
+    || !value.findingIds.every((id): id is string => typeof id === "string" && id.length > 0)
+    || new Set(value.findingIds).size !== value.findingIds.length) {
+    throw new ScenarioError(
+      `Baseline '${baselinePath}' must contain formatVersion 1 and a unique string array named findingIds.`,
+    );
+  }
+  return value.findingIds;
+}
+
+function compareBaseline(
+  findingIds: string[],
+  findings: Finding[],
+): { newFindingIds: string[]; staleFindingIds: string[] } {
+  const baselineIds = new Set(findingIds);
+  const currentIds = new Set(findings.map((finding) => finding.id));
+  return {
+    newFindingIds: [...currentIds].filter((id) => !baselineIds.has(id)).sort(),
+    staleFindingIds: [...baselineIds].filter((id) => !currentIds.has(id)).sort(),
   };
 }
 
@@ -274,7 +337,7 @@ export async function runSingleScenario(
   const target = getTargetOptions(options);
   const result = await transportRegistry.get(target.transport ?? "stdio").run({ ...target, scenario });
   const context = createOracleContext(scenario, result, options.revision);
-  return { scenario, result, context, findings: evaluateOracles(context) };
+  return { scenario, result, context, findings: evaluateOracles(context, options.oracleSelections) };
 }
 
 function addHealthChecks(scenario: Scenario, includeLifecycle = true): Scenario {

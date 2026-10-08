@@ -4,7 +4,11 @@ import type { OracleContext, FindingDraft } from "./types.js";
 
 const MAX_EVIDENCE_BYTES = 512;
 
-export function createFinding(context: OracleContext, draft: FindingDraft): Finding {
+export function createFinding(
+  context: OracleContext,
+  draft: FindingDraft,
+  severityOverride?: Finding["severity"],
+): Finding {
   const rule = context.rules.rules[draft.ruleId];
   if (rule === undefined) {
     throw new Error(`Spec rules for ${context.rules.revision} do not define '${draft.ruleId}'.`);
@@ -15,7 +19,7 @@ export function createFinding(context: OracleContext, draft: FindingDraft): Find
   return {
     id,
     ruleId: draft.ruleId,
-    severity: rule.severity,
+    severity: severityOverride ?? rule.severity,
     title: rule.title,
     message: draft.message,
     cite: rule.cite,

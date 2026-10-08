@@ -3,7 +3,7 @@ import { deriveSeed } from "../core/seed.js";
 import type { JsonValue } from "../core/types.js";
 import { ScenarioError } from "../core/errors.js";
 import * as fc from "fast-check";
-import type { ArgumentStrategy } from "./types.js";
+import type { ArgumentStrategy, ArgumentStrategySelection } from "./types.js";
 
 export const argumentStrategyRegistry = new ExtensionRegistry<ArgumentStrategy>();
 
@@ -22,6 +22,7 @@ export function generateToolArguments(
   toolName: string,
   schemaValue: JsonValue | undefined,
   seed: number,
+  selections?: readonly ArgumentStrategySelection[],
 ): JsonValue {
   const schema: Record<string, unknown> = isRecord(schemaValue)
     ? schemaValue
@@ -30,23 +31,20 @@ export function generateToolArguments(
     throw new ScenarioError(`Tool '${toolName}' input schema must describe an object.`);
   }
   const properties = isRecord(schema.properties) ? schema.properties : {};
+  const candidates = selections === undefined
+    ? argumentStrategyRegistry.names().map((name) => ({
+      name,
+      enabled: true,
+      options: {},
+    }))
+    : selections.filter((selection) => selection.enabled);
   const args: Record<string, JsonValue> = {};
   for (const key of Object.keys(properties).sort()) {
     const propertySchema = properties[key];
     if (!isRecord(propertySchema)) {
       continue;
     }
-    const strategyContext = { toolName, path: `/properties/${escapePointer(key)}`, schema: propertySchema };
-    const strategy = argumentStrategyRegistry.names()
-      .map((name) => argumentStrategyRegistry.get(name))
-      .find((candidate) => candidate.matches(strategyContext));
-    if (strategy === undefined) {
-      throw new ScenarioError(`No argument strategy matched '${toolName}${strategyContext.path}'.`);
-    }
-    args[key] = ensureJsonValue(strategy.generate({
-      ...strategyContext,
-      seed: deriveSeed(seed, toolName, strategyContext.path),
-    }));
+    args[key] = generatePropertyValue(toolName, key, propertySchema, seed, candidates);
   }
   const required = Array.isArray(schema.required)
     ? schema.required.filter((key): key is string => typeof key === "string")
@@ -57,20 +55,36 @@ export function generateToolArguments(
       if (!isRecord(propertySchema)) {
         throw new ScenarioError(`Required argument '${key}' for tool '${toolName}' has no usable schema.`);
       }
-      const strategyContext = { toolName, path: `/properties/${escapePointer(key)}`, schema: propertySchema };
-      const strategy = argumentStrategyRegistry.names()
-        .map((name) => argumentStrategyRegistry.get(name))
-        .find((candidate) => candidate.matches(strategyContext));
-      if (strategy === undefined) {
-        throw new ScenarioError(`No argument strategy matched '${toolName}${strategyContext.path}'.`);
-      }
-      args[key] = ensureJsonValue(strategy.generate({
-        ...strategyContext,
-        seed: deriveSeed(seed, toolName, strategyContext.path),
-      }));
+      args[key] = generatePropertyValue(toolName, key, propertySchema, seed, candidates);
     }
   }
   return args;
+}
+
+function generatePropertyValue(
+  toolName: string,
+  key: string,
+  schema: Record<string, unknown>,
+  seed: number,
+  selections: readonly ArgumentStrategySelection[],
+): JsonValue {
+  const path = `/properties/${escapePointer(key)}`;
+  for (const selection of selections) {
+    const strategy = argumentStrategyRegistry.get(selection.name);
+    const context = {
+      toolName,
+      path,
+      schema,
+      options: selection.options,
+    };
+    if (strategy.matches(context)) {
+      return ensureJsonValue(strategy.generate({
+        ...context,
+        seed: deriveSeed(seed, toolName, path),
+      }));
+    }
+  }
+  throw new ScenarioError(`No argument strategy matched '${toolName}${path}'.`);
 }
 
 function generateSchemaValue(schema: Record<string, unknown>, seed: number, depth: number): JsonValue {

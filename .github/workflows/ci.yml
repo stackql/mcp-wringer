@@ -28,11 +28,20 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Verify generated configuration docs
+        run: npm run docs:config:check
+
       - name: Run checks
         run: npm run check
 
       - name: Build package
         run: npm run build
+
+      - name: Verify plugin API
+        run: npm run check:plugin-api
+
+      - name: Test example plugin as a consumer
+        run: npm run test:example-plugin
 
       - name: Measure quick profile
         run: node scripts/measure-quick.mjs
