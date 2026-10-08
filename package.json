@@ -1,0 +1,81 @@
+{
+  "name": "@stackql/mcp-wringer",
+  "version": "0.1.0",
+  "description": "Protocol robustness fuzzer for Model Context Protocol servers.",
+  "type": "module",
+  "bin": {
+    "mcp-wringer": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin/index.d.ts",
+      "import": "./dist/plugin/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist/",
+    "dist-action/",
+    "spec/",
+    "README.md",
+    "config.schema.json",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "build:action": "tsup --config tsup.action.config.ts",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "check:action": "npm run build:action && git diff --exit-code -- dist-action",
+    "check:npm-publish": "node scripts/check-npm-trusted-publishing.mjs",
+    "check:plugin-api": "node scripts/check-plugin-api.mjs",
+    "check:package": "npm pack --dry-run --json --ignore-scripts | node scripts/check-package.mjs",
+    "docs:config": "node ./scripts/docs-config.mjs",
+    "docs:config:check": "npm run docs:config && git diff --exit-code -- docs/config-reference.md config.schema.json",
+    "evaluate:coverage-feedback": "npm run build && node scripts/evaluate-coverage-feedback.mjs",
+    "lint": "eslint .",
+    "spec:sync": "node ./scripts/spec-sync.mjs",
+    "test": "vitest run",
+    "test:action": "node scripts/test-action.mjs",
+    "test:example-plugin": "node scripts/test-example-plugin.mjs",
+    "test:matrix": "vitest run --config vitest.matrix.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "fuzzing",
+    "json-rpc",
+    "robustness",
+    "security"
+  ],
+  "author": "StackQL Studios",
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/server-everything": "^2026.8.31",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^24.19.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "cross-spawn": "^7.0.6",
+    "fast-check": "^4.10.2"
+  },
+  "overrides": {
+    "esbuild": "0.28.2"
+  }
+}

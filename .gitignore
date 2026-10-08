@@ -147,3 +147,11 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated Action bundle (commit deliberately as part of M6)
+/dist-action/
+!/dist-action/
+!/dist-action/**
+
+# Generated fuzzer reports and response-signature corpus
+.mcp-wringer/

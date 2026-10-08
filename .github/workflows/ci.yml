@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions: {}
+
+jobs:
+  test:
+    name: check (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify generated configuration docs
+        run: npm run docs:config:check
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify committed Action bundle
+        run: npm run check:action
+
+      - name: Verify npm package contents
+        run: npm run check:package
+
+      - name: Verify plugin API
+        run: npm run check:plugin-api
+
+      - name: Test example plugin as a consumer
+        run: npm run test:example-plugin
+
+      - name: Measure quick profile
+        run: node scripts/measure-quick.mjs
+
+      - name: Verify vendored specs
+        run: npm run spec:sync && git diff --exit-code spec
