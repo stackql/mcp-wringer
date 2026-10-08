@@ -4,7 +4,8 @@ export default defineConfig({
   entry: ["src/action/index.ts"],
   format: ["cjs"],
   target: "node22",
-  sourcemap: true,
+  noExternal: ["ajv", "cross-spawn", "fast-check"],
+  sourcemap: false,
   clean: true,
   outDir: "dist-action",
   outExtension() {
