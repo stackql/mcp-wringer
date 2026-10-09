@@ -8528,6 +8528,17 @@ var import_node_perf_hooks = require("perf_hooks");
 // src/target/spawn.ts
 var import_cross_spawn = __toESM(require_cross_spawn(), 1);
 var import_node_child_process = require("child_process");
+var TARGET_EXIT_GRACE_MS = 500;
+async function waitForExitGrace(exitPromise) {
+  let timer;
+  await Promise.race([
+    exitPromise,
+    new Promise((resolve5) => {
+      timer = setTimeout(resolve5, TARGET_EXIT_GRACE_MS);
+    })
+  ]);
+  clearTimeout(timer);
+}
 function spawnTarget(options) {
   const env = options.inheritEnvironment ? { ...process.env, ...options.env } : { ...minimalEnvironment(), ...options.env };
   return (0, import_cross_spawn.default)(options.command, options.args, {
@@ -8694,7 +8705,14 @@ var StdioScenarioSession = class {
       await waitForSpawn(this.#child, this.#spawnError, this.#timeoutMs);
       for (const step of scenario.steps) {
         try {
-          const response = await executeStep(step, this.#child, this.#frames, this.#unmatched, this.#recorder);
+          const response = await executeStep(
+            step,
+            this.#child,
+            this.#frames,
+            this.#unmatched,
+            this.#recorder,
+            this.#timeoutMs
+          );
           if (response !== void 0) {
             responses.push(response);
           }
@@ -8706,13 +8724,12 @@ var StdioScenarioSession = class {
           break;
         }
       }
-      if (failure?.kind === "transport-error" && /EPIPE/u.test(failure.message) && this.#exitStatus === void 0) {
-        await Promise.race([
-          this.#exitPromise,
-          new Promise((resolve5) => setTimeout(resolve5, 100))
-        ]);
+      if (failure !== void 0 && failure.kind !== "target-exit") {
+        if (this.#exitStatus === void 0) {
+          await waitForExitGrace(this.#exitPromise);
+        }
         if (this.#exitStatus !== void 0) {
-          failure = { ...failure, kind: "target-exit" };
+          failure = { kind: "target-exit", phase: "transport", message: failure.message };
         }
       }
       if (options.closeAfterScenario ?? true) {
@@ -8766,7 +8783,7 @@ async function runStdioScenario(options) {
   const session = new StdioScenarioSession(options);
   return session.execute(options.scenario);
 }
-async function executeStep(step, child, frames, unmatched, recorder) {
+async function executeStep(step, child, frames, unmatched, recorder, defaultTimeoutMs) {
   switch (step.type) {
     case "send": {
       if (step.wire !== void 0 && step.wire.transport !== "stdio") {
@@ -8786,7 +8803,7 @@ async function executeStep(step, child, frames, unmatched, recorder) {
       return void 0;
     }
     case "await-response":
-      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? 5e3);
+      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? defaultTimeoutMs);
     case "transport":
       if (step.operation !== "close-stdin") {
         throw new ScenarioError(`Transport operation '${step.operation}' cannot run over stdio.`);
@@ -9182,10 +9199,7 @@ var HttpScenarioSession = class {
         }
       }
       if (failure !== void 0 && this.#exitPromise !== void 0 && this.#exitStatus === void 0) {
-        await Promise.race([
-          this.#exitPromise,
-          new Promise((resolve5) => setTimeout(resolve5, 100))
-        ]);
+        await waitForExitGrace(this.#exitPromise);
       }
       if (options.closeAfterScenario ?? true) {
         await this.close(true);
@@ -9923,7 +9937,7 @@ async function inspectServer(specRevision, targetOrCommand, args, options = {}) 
     description: "Read-only MCP surface inspection.",
     steps
   };
-  const { responses } = await transportRegistry.get(target.transport ?? "stdio").run({
+  const { responses, outcome } = await transportRegistry.get(target.transport ?? "stdio").run({
     ...target,
     scenario
   });
@@ -9932,6 +9946,12 @@ async function inspectServer(specRevision, targetOrCommand, args, options = {}) 
     const { code, message } = rejection.error;
     throw new TargetError(
       `Target rejected inspection for spec revision ${specRevision}: error ${String(code)} ${typeof message === "string" ? message : ""}`.trimEnd()
+    );
+  }
+  if (outcome.failure !== void 0) {
+    const exit = outcome.exitCode === null && outcome.signal === null ? "" : ` (exit code ${String(outcome.exitCode)}, signal ${String(outcome.signal)})`;
+    throw new TargetError(
+      `Target failed during inspection after ${String(responses.length)} response(s): ${outcome.failure.kind}: ${outcome.failure.message}${exit}`
     );
   }
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {
