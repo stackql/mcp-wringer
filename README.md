@@ -128,11 +128,11 @@ npm publish --access public --registry=https://registry.npmjs.org/
 
 Complete the browser login and any 2FA prompts. `--access public` is required for this scoped public package; the package also sets public access in `publishConfig`. Do not put an OTP or npm token into source, scripts, or GitHub secrets. Local publication does not provide GitHub Actions OIDC provenance; do not add `--provenance` to this manual procedure.
 
-Verify the published version (substitute the release version for later releases):
+Verify the published version (substitute the release version for later releases). Run the `npx` command from a directory outside the repository checkout: inside it, `npx` matches the checkout's own package name and fails with `'mcp-wringer' is not recognized` or `command not found`, because the package's bin is not linked into its own `node_modules/.bin`.
 
 ```sh
 npm view @stackql/mcp-wringer@0.1.0 version dist.integrity --registry=https://registry.npmjs.org/
-npx --yes --registry=https://registry.npmjs.org/ @stackql/mcp-wringer@0.1.0 --help
+cd "$(mktemp -d)" && npx --yes --registry=https://registry.npmjs.org/ @stackql/mcp-wringer@0.1.0 --help
 ```
 
 Confirm the package is public on [npmjs](https://www.npmjs.com/package/@stackql/mcp-wringer). The [npm scoped-package guide](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages) describes account and publication requirements.
@@ -149,5 +149,6 @@ The repository is public and has one root [action.yml](./action.yml), with displ
 6. Create tag `v0.1.0` at the exact validated release commit (use the matching `vX.Y.Z` for later releases), title the release `v0.1.0`, and include release notes. Do not select a prerelease for the stable release.
 7. Click **Publish release** and complete GitHub's authentication prompts. Confirm the Marketplace listing is visible and the **Validate release** workflow succeeds. This workflow does not publish to npm.
 8. After validation, create or update the moving `v0` major tag to the same commit. Keep `v0.1.0` immutable. The workflow examples use `@v0` to receive updates within that major version.
+9. Run the [Published Action smoke](./.github/workflows/published-action-smoke.yml) workflow from the Actions tab. It pulls the Action from `@v0` and the package from the npm registry, runs both against the fixture server at that tag on Linux (x64 and arm64), macOS and Windows, and checks that the npm `latest` version matches the tag. It also runs weekly as a canary.
 
-Test the published Action in a small workflow against a local fixture or an isolated authorized server before integrating it into StackQL CI. Record the Marketplace URL and release commit SHA. See [GitHub's Marketplace publication guide](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/publish-in-github-marketplace) and the [maintainer release checklist](./docs/dev/release-checklist.md).
+Test the published Action against an isolated authorized server before integrating it into another project's CI. The StackQL repository runs it as a pull request gate in its `mcp-wringer` workflow, which builds the server from the pull request and fuzzes stdio and Streamable HTTP in both protocol revisions on each platform it ships. Record the Marketplace URL and release commit SHA. See [GitHub's Marketplace publication guide](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/publish-in-github-marketplace) and the [maintainer release checklist](./docs/dev/release-checklist.md).

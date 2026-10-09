@@ -17,7 +17,8 @@ The release job has only `contents: read`. It verifies the tag against the packa
 5. Verify the exact published npm version and CLI before proceeding to Marketplace publication.
 6. The maintainer creates the immutable `vX.Y.Z` tag and GitHub release through the Marketplace release form. The tag must match `package.json` exactly; publishing the release triggers the validation-only `.github/workflows/release.yml`.
 7. Confirm the validation workflow succeeds, verify the Marketplace listing, and then create or update the moving `vX` tag. Do not overwrite or move a published npm version or immutable tag.
+8. Dispatch the `Published Action smoke` workflow and confirm it passes. It consumes the Action from the moving tag and the package from the npm registry, so it is the first check that runs what users install.
 
 ## GitHub Marketplace
 
-Follow the README's Marketplace steps, including the Developer Agreement, metadata/name validation, categories, and exact release commit selection. Marketplace publication must be explicitly approved and performed by the maintainer; the release validation workflow does not list the Action. Validate the published Action against a local target before the separate StackQL CI integration.
+Follow the README's Marketplace steps, including the Developer Agreement, metadata/name validation, categories, and exact release commit selection. Marketplace publication must be explicitly approved and performed by the maintainer; the release validation workflow does not list the Action. The published Action is consumed as a pull request gate by the StackQL repository's `mcp-wringer` workflow.
