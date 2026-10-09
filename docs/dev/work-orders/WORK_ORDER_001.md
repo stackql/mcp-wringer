@@ -125,7 +125,7 @@ export default defineConfig({
 ```
 
 ```yaml
-- uses: stackql/mcp-wringer@<commit sha>
+- uses: stackql/mcp-wringer@v0
   with:
     command: node ./dist/server.js
     profile: quick

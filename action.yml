@@ -2,6 +2,10 @@ name: MCP Wringer
 description: Fuzz an authorised MCP server and publish deterministic reports.
 author: StackQL Studios
 
+branding:
+  icon: shield
+  color: blue
+
 inputs:
   command:
     description: Executable to start a stdio target. Use a JSON string array in args; no shell is used.

@@ -2,6 +2,18 @@
   "name": "@stackql/mcp-wringer",
   "version": "0.1.0",
   "description": "Protocol robustness fuzzer for Model Context Protocol servers.",
+  "homepage": "https://github.com/stackql/mcp-wringer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stackql/mcp-wringer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stackql/mcp-wringer/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "bin": {
     "mcp-wringer": "./dist/cli/index.js"
@@ -34,7 +46,6 @@
     "build:action": "tsup --config tsup.action.config.ts",
     "check": "npm run lint && npm run typecheck && npm test",
     "check:action": "npm run build:action && git diff --exit-code -- dist-action",
-    "check:npm-publish": "node scripts/check-npm-trusted-publishing.mjs",
     "check:plugin-api": "node scripts/check-plugin-api.mjs",
     "check:package": "npm pack --dry-run --json --ignore-scripts | node scripts/check-package.mjs",
     "docs:config": "node ./scripts/docs-config.mjs",
