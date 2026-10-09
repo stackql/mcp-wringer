@@ -1,0 +1,157 @@
+# Exercises the published artifacts the way a consumer does: the Action
+# pulled from the moving v0 tag, and the npm package pulled from the
+# registry.  Both run against the fixture server at the same tag, so a
+# failure here means the published tag or package is broken, not that main
+# has drifted.  Run it after moving the v0 tag, and on a weekly schedule as a
+# canary.
+#
+# The self-test workflow (action-self-test.yml) covers the checked-out
+# source; this one covers what users actually install.
+
+name: Published Action smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: '0 6 * * 1'
+
+permissions: {}
+
+env:
+  # The tag the Action reference below points at.  Keep both in step.
+  ACTION_REF: v0
+
+jobs:
+  action:
+    name: published Action (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - name: Checkout fixture at the Action tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.ACTION_REF }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Run clean fixture through published Action
+        id: clean
+        uses: stackql/mcp-wringer@v0
+        with:
+          command: node
+          args: '["fixtures/stdio-server.mjs","--revision","2025-11-25"]'
+          profile: quick
+          seed: "20261118"
+          report_directory: ${{ runner.temp }}/mcp-wringer-clean
+
+      - name: Verify clean run and report outputs
+        env:
+          FINDING_COUNT: ${{ steps.clean.outputs.finding_count }}
+          SARIF_PATH: ${{ steps.clean.outputs.sarif_path }}
+          REPORT_DIRECTORY: ${{ steps.clean.outputs.report_directory }}
+          EXPECTED_SEED: ${{ steps.clean.outputs.seed }}
+          HIGH_COUNT: ${{ steps.clean.outputs.high_count }}
+          MEDIUM_COUNT: ${{ steps.clean.outputs.medium_count }}
+          LOW_COUNT: ${{ steps.clean.outputs.low_count }}
+          INFO_COUNT: ${{ steps.clean.outputs.info_count }}
+        run: node scripts/assert-action-output.mjs clean
+
+      - name: Run defective fixture through published Action
+        id: defective
+        continue-on-error: true
+        uses: stackql/mcp-wringer@v0
+        with:
+          command: node
+          args: '["fixtures/stdio-server.mjs","--revision","2025-11-25"]'
+          env: '{"MCP_WRINGER_DEFECTS":"exit-on-decode-error"}'
+          profile: quick
+          seed: "20261118"
+          fail_on: high
+          report_directory: ${{ runner.temp }}/mcp-wringer-defective
+
+      - name: Verify defective run fails at the configured threshold
+        if: always()
+        env:
+          OUTCOME: ${{ steps.defective.outcome }}
+          FINDING_COUNT: ${{ steps.defective.outputs.finding_count }}
+          HIGH_COUNT: ${{ steps.defective.outputs.high_count }}
+          SARIF_PATH: ${{ steps.defective.outputs.sarif_path }}
+          REPORT_DIRECTORY: ${{ steps.defective.outputs.report_directory }}
+        run: node scripts/assert-action-output.mjs defective
+
+  npm:
+    name: published npm package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - name: Checkout fixture at the Action tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.ACTION_REF }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Check the npm latest version matches the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tagged="$(node -p "require('./package.json').version")"
+          published="$(npm view @stackql/mcp-wringer version --registry=https://registry.npmjs.org/)"
+          echo "tag ${ACTION_REF} has ${tagged}; npm latest is ${published}"
+          if [ "$tagged" != "$published" ]; then
+            echo "npm latest and the ${ACTION_REF} tag are out of step" >&2
+            exit 1
+          fi
+
+      # npx is run outside the checkout on purpose: inside it, npx matches
+      # the repository's own package name and looks for a local bin link
+      # that does not exist.
+      - name: Run clean fixture through the npm CLI
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          FIXTURE: ${{ github.workspace }}/fixtures/stdio-server.mjs
+        run: |
+          set -euo pipefail
+          npx --yes --registry=https://registry.npmjs.org/ @stackql/mcp-wringer@latest run \
+            --spec 2025-11-25 --profile quick --seed 20261118 \
+            --report-dir "$RUNNER_TEMP/npm-clean" \
+            -- node "$FIXTURE" --revision 2025-11-25
+
+      - name: Run defective fixture through the npm CLI and expect exit 1
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          FIXTURE: ${{ github.workspace }}/fixtures/stdio-server.mjs
+        run: |
+          set -uo pipefail
+          npx --yes --registry=https://registry.npmjs.org/ @stackql/mcp-wringer@latest run \
+            --spec 2025-11-25 --profile quick --seed 20261118 --fail-on high \
+            --env MCP_WRINGER_DEFECTS=exit-on-decode-error \
+            --report-dir "$RUNNER_TEMP/npm-defective" \
+            -- node "$FIXTURE" --revision 2025-11-25
+          status=$?
+          if [ "$status" -ne 1 ]; then
+            echo "expected exit code 1 for a high-severity finding, got ${status}" >&2
+            exit 1
+          fi
+          echo "defective fixture failed the run with exit code 1 as expected"
