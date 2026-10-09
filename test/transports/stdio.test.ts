@@ -1,7 +1,9 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { inspectServer } from "../../src/cli/inspect.js";
+import { TargetError } from "../../src/core/errors.js";
 import type { Scenario, SpecRevision } from "../../src/core/types.js";
+import { evaluateOracles } from "../../src/oracles/index.js";
 import { specProfiles } from "../../src/spec/profiles.js";
 import { runStdioScenario } from "../../src/transports/stdio/runner.js";
 
@@ -129,6 +131,8 @@ describe("stdio response ordering", () => {
       "});",
     ].join("\n");
     const request = (id: string) => ({ jsonrpc: "2.0" as const, id, method: "tools/list" });
+    // No lifecycle step precedes these awaits, so the first one also covers target startup, which can
+    // take several seconds on a loaded host. This test checks ordering, not latency.
     const scenario: Scenario = {
       formatVersion: 1,
       id: "out-of-order",
@@ -136,7 +140,7 @@ describe("stdio response ordering", () => {
       steps: [
         { type: "send", message: request("first") },
         { type: "send", message: request("second") },
-        { type: "await-response", id: "first", timeoutMs: 2_000 },
+        { type: "await-response", id: "first", timeoutMs: 15_000 },
         { type: "await-response", id: "second", timeoutMs: 2_000 },
       ],
     };
@@ -150,6 +154,64 @@ describe("stdio response ordering", () => {
       { jsonrpc: "2.0", id: "first", result: {} },
       { jsonrpc: "2.0", id: "second", result: {} },
     ]);
+  });
+});
+
+describe("stdio target exit classification", () => {
+  it("reports a target that exits just after a response timeout as a crash, not a hang", async () => {
+    // The target acknowledges its input, then exits 200 ms later, after the 50 ms response timeout
+    // has fired. Timing starts from the acknowledgement so that target startup time is excluded.
+    // This is the ordering a crashing target can produce on a heavily loaded host.
+    const scenario: Scenario = {
+      formatVersion: 1,
+      id: "late-exit",
+      specRevision: "2025-11-25",
+      steps: [
+        { type: "send-raw", bytesBase64: Buffer.from("{not-json}\n").toString("base64") },
+        { type: "await-response", id: "ack", timeoutMs: 10_000 },
+        { type: "await-response", id: "never", timeoutMs: 50 },
+      ],
+    };
+    const result = await runStdioScenario({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdin.once('data', () => { process.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":\"ack\",\"result\":{}}\\n'); setTimeout(() => process.exit(17), 200); }); setInterval(() => {}, 1000);",
+      ],
+      scenario,
+    });
+    expect(result.outcome.failure?.kind).toBe("target-exit");
+    expect(result.outcome.exitCode).toBe(17);
+    const ruleIds = evaluateOracles({ scenario, rules: specProfiles.get("2025-11-25").rules, ...result })
+      .map((finding) => finding.ruleId);
+    expect(ruleIds).toContain("crash.process-exit");
+    expect(ruleIds).not.toContain("hang.request-timeout");
+  });
+
+  it("uses the configured timeout for await-response steps without their own timeout", async () => {
+    // The target answers "late" 2.5 s after acknowledging its input. With the configured 1 s
+    // timeout the step must time out. The old hard-coded 5 s default would have accepted the reply.
+    const scenario: Scenario = {
+      formatVersion: 1,
+      id: "configured-timeout",
+      specRevision: "2025-11-25",
+      steps: [
+        { type: "send-raw", bytesBase64: Buffer.from("{}\n").toString("base64") },
+        { type: "await-response", id: "ack", timeoutMs: 15_000 },
+        { type: "await-response", id: "late" },
+      ],
+    };
+    const result = await runStdioScenario({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdin.once('data', () => { process.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":\"ack\",\"result\":{}}\\n'); setTimeout(() => process.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":\"late\",\"result\":{}}\\n'), 2500); }); setInterval(() => {}, 1000);",
+      ],
+      scenario,
+      timeoutMs: 1_000,
+    });
+    expect(result.outcome.failure?.kind).toBe("timeout");
+    expect(result.responses).toEqual([{ jsonrpc: "2.0", id: "ack", result: {} }]);
   });
 });
 
@@ -214,6 +276,11 @@ describe("inspect command surface", () => {
     },
   );
 
+  it("reports the underlying target failure when inspection is cut short", async () => {
+    const inspection = inspectServer("2025-11-25", process.execPath, ["-e", "process.exit(7)"]);
+    await expect(inspection).rejects.toBeInstanceOf(TargetError);
+    await expect(inspection).rejects.toThrow(/Target failed during inspection after 0 response\(s\): target-exit: .*exit code 7/u);
+  });
 });
 
 function toBuffer(event: { encoding: "utf8" | "base64"; data: string }): Buffer {

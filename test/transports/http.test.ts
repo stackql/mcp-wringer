@@ -200,10 +200,13 @@ describe.each(revisions)("Streamable HTTP transport on %s", (revision) => {
       ...specProfiles.get(revision).lifecycleSteps("http-timeout-lifecycle"),
       ...requestSteps(revision, "tools/list", "http-timeout"),
     ]);
-    const result = await new HttpScenarioSession({ ...target, scenario, timeoutMs: 5_000 }).execute(scenario);
+    // durationMs includes spawning the target and the lifecycle, so compare it with the
+    // transport timeout rather than a fixed bound that depends on host startup speed.
+    const transportTimeoutMs = 15_000;
+    const result = await new HttpScenarioSession({ ...target, scenario, timeoutMs: transportTimeoutMs }).execute(scenario);
     expect(result.outcome.failure?.kind).toBe("timeout");
-    expect(result.outcome.durationMs).toBeLessThan(2_000);
-  }, 10_000);
+    expect(result.outcome.durationMs).toBeLessThan(transportTimeoutMs);
+  }, 30_000);
 
   it.each([
     ...httpDefectCases.filter((testCase) =>

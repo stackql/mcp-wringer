@@ -6,6 +6,7 @@ import type { InspectedSurface } from "../../src/target/surface.js";
 import type { SpecRevision } from "../../src/core/types.js";
 import { inspectServer } from "../../src/cli/inspect.js";
 import { minimizeScenario } from "../../src/core/minimizer.js";
+import { TargetError } from "../../src/core/errors.js";
 import { loadReproducer } from "../../src/core/reproducer.js";
 import { createRootSeed, deriveSeed } from "../../src/core/seed.js";
 import { defaultGeneratorSequence, runFuzz, runSingleScenario } from "../../src/core/run.js";
@@ -278,6 +279,21 @@ describe("run artifacts and minimisation", () => {
     expect(result.scenario.steps[0]?.type).toBe("send-raw");
     expect(result.attempts).toBeGreaterThan(2);
   }, 60_000);
+});
+
+describe("target startup failures", () => {
+  it("fails the run as a target error when the target exits before discovery completes", async () => {
+    // Before, this was swallowed: discovery fell back to an empty surface and the run could pass
+    // with zero findings against a target that never started.
+    await expect(runFuzz({
+      command: process.execPath,
+      args: [fixture],
+      revision: "2025-11-25",
+      seed: 1,
+      cases: 2,
+      corpusDirectory: await temporaryDirectory(),
+    })).rejects.toThrow(TargetError);
+  });
 });
 
 async function inspectFixture(revision: "2025-11-25" | "2026-07-28"): Promise<InspectedSurface> {

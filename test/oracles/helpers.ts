@@ -13,14 +13,18 @@ export async function executeFixture(
 ): Promise<OracleContext> {
   const profile = specProfiles.get(revision);
   const scenarioId = options.id ?? `oracle-${revision}`;
+  // Lifecycle awaits also cover fixture startup, which can take several seconds under parallel test
+  // load. Give them their own allowance so a short options.timeoutMs does not apply to startup.
+  const lifecycle = profile.lifecycleSteps(`${scenarioId}-lifecycle`).map((step) =>
+    step.type === "await-response" && step.timeoutMs === undefined ? { ...step, timeoutMs: 15_000 } : step);
   const scenario = {
     formatVersion: 1 as const,
     id: scenarioId,
     specRevision: revision,
     steps: [
-      ...profile.lifecycleSteps(`${scenarioId}-lifecycle`),
+      ...lifecycle,
       ...(revision === "2026-07-28"
-        ? requestSteps(revision, "server/discover", `${scenarioId}-ready`, undefined, 5_000)
+        ? requestSteps(revision, "server/discover", `${scenarioId}-ready`, undefined, 15_000)
         : []),
       ...steps,
     ],

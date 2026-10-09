@@ -50,7 +50,7 @@ export async function inspectServer(
     description: "Read-only MCP surface inspection.",
     steps,
   };
-  const { responses } = await transportRegistry.get(target.transport ?? "stdio").run({
+  const { responses, outcome } = await transportRegistry.get(target.transport ?? "stdio").run({
     ...target,
     scenario,
   });
@@ -59,6 +59,14 @@ export async function inspectServer(
     const { code, message } = rejection.error;
     throw new TargetError(
       `Target rejected inspection for spec revision ${specRevision}: error ${String(code)} ${typeof message === "string" ? message : ""}`.trimEnd(),
+    );
+  }
+  if (outcome.failure !== undefined) {
+    const exit = outcome.exitCode === null && outcome.signal === null
+      ? ""
+      : ` (exit code ${String(outcome.exitCode)}, signal ${String(outcome.signal)})`;
+    throw new TargetError(
+      `Target failed during inspection after ${String(responses.length)} response(s): ${outcome.failure.kind}: ${outcome.failure.message}${exit}`,
     );
   }
   if (responses.length !== methods.length + (specRevision === "2025-11-25" ? 1 : 0)) {

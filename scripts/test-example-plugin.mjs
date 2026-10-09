@@ -10,6 +10,7 @@ try {
   const configPath = join(directory, "config.json");
   const config = {
     profile: "quick",
+    specRevision: "2025-11-25",
     cases: 2,
     durationMs: 10_000,
     timeoutMs: 1_000,
@@ -33,6 +34,8 @@ try {
     "--",
     process.execPath,
     resolve("fixtures", "stdio-server.mjs"),
+    "--revision",
+    "2025-11-25",
   ], { encoding: "utf8", timeout: 30_000 });
   if (result.error !== undefined) {
     throw result.error;

@@ -11,6 +11,21 @@ export interface SpawnTargetOptions {
   inheritEnvironment?: boolean;
 }
 
+// After a step fails, how long to wait for a target that is already exiting before terminating it.
+// Without this, a slow host can turn a real crash into a timeout or transport error.
+export const TARGET_EXIT_GRACE_MS = 500;
+
+export async function waitForExitGrace(exitPromise: Promise<unknown>): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    exitPromise,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, TARGET_EXIT_GRACE_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 export function spawnTarget(options: SpawnTargetOptions): ChildProcess {
   const env = options.inheritEnvironment
     ? { ...process.env, ...options.env }

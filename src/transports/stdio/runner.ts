@@ -11,7 +11,7 @@ import type {
   TransportRunFailure,
   TransportRunOutcome,
 } from "../../core/types.js";
-import { spawnTarget, terminateTarget, type SpawnTargetOptions } from "../../target/spawn.js";
+import { spawnTarget, terminateTarget, waitForExitGrace, type SpawnTargetOptions } from "../../target/spawn.js";
 import type { TransportRunResult, TransportSession } from "../types.js";
 
 export interface StdioRunOptions extends SpawnTargetOptions {
@@ -121,7 +121,14 @@ export class StdioScenarioSession implements TransportSession {
       await waitForSpawn(this.#child, this.#spawnError, this.#timeoutMs);
       for (const step of scenario.steps) {
         try {
-          const response = await executeStep(step, this.#child, this.#frames, this.#unmatched, this.#recorder);
+          const response = await executeStep(
+            step,
+            this.#child,
+            this.#frames,
+            this.#unmatched,
+            this.#recorder,
+            this.#timeoutMs,
+          );
           if (response !== undefined) {
             responses.push(response);
           }
@@ -133,13 +140,13 @@ export class StdioScenarioSession implements TransportSession {
           break;
         }
       }
-      if (failure?.kind === "transport-error" && /EPIPE/u.test(failure.message) && this.#exitStatus === undefined) {
-        await Promise.race([
-          this.#exitPromise,
-          new Promise<void>((resolve) => setTimeout(resolve, 100)),
-        ]);
+      if (failure !== undefined && failure.kind !== "target-exit") {
+        if (this.#exitStatus === undefined) {
+          await waitForExitGrace(this.#exitPromise);
+        }
+        // The target exited on its own before being terminated, so the exit is the primary failure.
         if (this.#exitStatus !== undefined) {
-          failure = { ...failure, kind: "target-exit" };
+          failure = { kind: "target-exit", phase: "transport", message: failure.message };
         }
       }
       if (options.closeAfterScenario ?? true) {
@@ -202,6 +209,7 @@ async function executeStep(
   frames: AsyncQueue<Buffer>,
   unmatched: Map<string | number, JsonValue>,
   recorder: TraceRecorder,
+  defaultTimeoutMs: number,
 ): Promise<JsonValue | undefined> {
   switch (step.type) {
     case "send": {
@@ -221,7 +229,7 @@ async function executeStep(
       return undefined;
     }
     case "await-response":
-      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? 5_000);
+      return readResponse(frames, unmatched, step.id, step.timeoutMs ?? defaultTimeoutMs);
     case "transport":
       if (step.operation !== "close-stdin") {
         throw new ScenarioError(`Transport operation '${step.operation}' cannot run over stdio.`);

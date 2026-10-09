@@ -16,7 +16,7 @@ import type {
   WireDescriptor,
 } from "../../core/types.js";
 import { specProfiles } from "../../spec/profiles.js";
-import { spawnTarget, terminateTarget } from "../../target/spawn.js";
+import { spawnTarget, terminateTarget, waitForExitGrace } from "../../target/spawn.js";
 import type { HttpTransportOptions, TransportRunResult, TransportSession } from "../types.js";
 
 const MAX_RESPONSE_BYTES = 2_097_152;
@@ -115,10 +115,7 @@ export class HttpScenarioSession implements TransportSession {
         }
       }
       if (failure !== undefined && this.#exitPromise !== undefined && this.#exitStatus === undefined) {
-        await Promise.race([
-          this.#exitPromise,
-          new Promise<void>((resolve) => setTimeout(resolve, 100)),
-        ]);
+        await waitForExitGrace(this.#exitPromise);
       }
       if (options.closeAfterScenario ?? true) {
         await this.close(true);
