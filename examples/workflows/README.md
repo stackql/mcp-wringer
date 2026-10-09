@@ -1,6 +1,6 @@
 # GitHub Actions workflow examples
 
-These examples are templates for servers you own or are authorised to test. They deliberately use a placeholder for the MCP Wringer checkout revision. Replace `<full-commit-sha>` with the reviewed 40-character commit SHA of this repository; do not use a moving branch or tag in a production workflow. The checkout action itself is pinned to a full commit SHA.
+These examples are templates for servers you own or are authorised to test. Trusted Actions use floating major-version tags to receive upstream updates within a major version. The MCP Wringer checkout uses `v0`, which becomes available after the first release and moving major tag are published.
 
 The examples check out MCP Wringer into `.github/actions/mcp-wringer` and invoke it locally. Keep the target isolated and do not pass real credentials to it.
 
@@ -23,13 +23,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout application
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
         with:
           repository: stackql/mcp-wringer
-          ref: <full-commit-sha>
+          ref: v0
           path: .github/actions/mcp-wringer
 
       - name: Run quick profile
@@ -64,13 +64,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout application
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
         with:
           repository: stackql/mcp-wringer
-          ref: <full-commit-sha>
+          ref: v0
           path: .github/actions/mcp-wringer
 
       - name: Run deep profile
@@ -104,13 +104,13 @@ jobs:
       security-events: write
     steps:
       - name: Checkout application
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
 
       - name: Checkout MCP Wringer
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@v7
         with:
           repository: stackql/mcp-wringer
-          ref: <full-commit-sha>
+          ref: v0
           path: .github/actions/mcp-wringer
 
       - name: Run quick profile
@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.wringer.outputs.sarif_path }}
 ```

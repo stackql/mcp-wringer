@@ -155,3 +155,7 @@ vite.config.ts.timestamp-*
 
 # Generated fuzzer reports and response-signature corpus
 .mcp-wringer/
+
+# stackql
+/.stackql
+stackql_mcp_server-*.log
