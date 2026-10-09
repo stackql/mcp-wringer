@@ -11,7 +11,9 @@ describe.each(revisions)("stdio oracle detection for %s", (revision) => {
   it("detects a process exit after malformed JSON", async () => {
     const steps: ScenarioStep[] = [
       { type: "send-raw", bytesBase64: Buffer.from("{not-json}\n").toString("base64") },
-      ...requestSteps(revision, "tools/list", "after-decode-error"),
+      // The fixture exits on this input, which ends the wait at once. The long timeout only covers a
+      // CPU-starved fixture that is slow to exit.
+      ...requestSteps(revision, "tools/list", "after-decode-error", undefined, 10_000),
     ];
     const context = await executeFixture(revision, steps, { defect: "exit-on-decode-error" });
     expectRule(context, "crash.process-exit");

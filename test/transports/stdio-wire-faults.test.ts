@@ -5,6 +5,9 @@ import { specProfiles } from "../../src/spec/profiles.js";
 import { executeFixture, requestSteps } from "../oracles/helpers.js";
 
 const revisions = ["2025-11-25", "2026-07-28"] as const;
+// Each defect below makes the fixture exit. Exiting closes stdout and ends the wait at once, so this
+// only bounds how long a CPU-starved fixture may take to exit. It is not a latency assertion.
+const crashWaitMs = 10_000;
 const defectFaults = [
   "split-write",
   "coalesced-frames",
@@ -53,7 +56,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "whole-frame-write-only",
           steps: [
             { type: "send", message: request, wire: { transport: "stdio", chunks: [1, 2, 3], delayMs: 500 } },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
       case "coalesced-frames": {
@@ -65,8 +68,8 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
               type: "send-raw",
               bytesBase64: Buffer.from(`${requestText}\n${JSON.stringify(second)}\n`).toString("base64"),
             },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
-            { type: "await-response", id: "wire-coalesced-second", timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
+            { type: "await-response", id: "wire-coalesced-second", timeoutMs: crashWaitMs },
           ],
         };
       }
@@ -76,7 +79,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from(requestText).toString("base64") },
             { type: "transport", operation: "close-stdin" },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
       case "doubled-newline":
@@ -84,7 +87,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "reject-empty-frame",
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from(`${requestText}\n\n`).toString("base64") },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
       case "crlf":
@@ -92,7 +95,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "reject-crlf",
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from(`${requestText}\r\n`).toString("base64") },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
       case "invalid-utf8":
@@ -100,7 +103,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "exit-on-decode-error",
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from([0xff, 0x0a]).toString("base64") },
-            ...requestSteps(revision, "tools/list", "after-invalid-utf8"),
+            ...requestSteps(revision, "tools/list", "after-invalid-utf8", undefined, crashWaitMs),
           ],
         };
       case "byte-order-mark":
@@ -108,7 +111,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "exit-on-decode-error",
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from(`\uFEFF${requestText}\n`).toString("base64") },
-            ...requestSteps(revision, "tools/list", "after-bom"),
+            ...requestSteps(revision, "tools/list", "after-bom", undefined, crashWaitMs),
           ],
         };
       case "oversized-frame": {
@@ -120,7 +123,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "reject-oversized-frame",
           steps: [
             { type: "send-raw", bytesBase64: Buffer.from(`${JSON.stringify(largeRequest)}\n`).toString("base64") },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
       }
@@ -137,7 +140,7 @@ describe.each(revisions)("stdio wire handling for %s", (revision) => {
           defect: "partial-frame-timeout",
           steps: [
             { type: "send", message: request, wire: { transport: "stdio", chunks: [1], delayMs: 60 } },
-            { type: "await-response", id: `wire-${fault}`, timeoutMs: 1_000 },
+            { type: "await-response", id: `wire-${fault}`, timeoutMs: crashWaitMs },
           ],
         };
     }
