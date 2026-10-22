@@ -6,7 +6,7 @@ Before contributing, read [AGENTS.md](./AGENTS.md) for project scope, design rul
 
 ## Setup
 
-1. Install Node 22 or later.
+1. Install Node.js 22.23.4 or later, 24.22.1 or later, or 26.12.1 or later. Earlier releases in each line are affected by the [October 2026 Node.js security releases](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
 2. Install dependencies:
    - `npm ci`
 3. Run checks:

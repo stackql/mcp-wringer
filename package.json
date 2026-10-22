@@ -1,6 +1,6 @@
 {
   "name": "@stackql/mcp-wringer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Protocol robustness fuzzer for Model Context Protocol servers.",
   "homepage": "https://github.com/stackql/mcp-wringer#readme",
   "repository": {
@@ -31,7 +31,7 @@
     }
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.23.4 <23 || >=24.22.1 <25 || >=26.12.1"
   },
   "files": [
     "dist/",
